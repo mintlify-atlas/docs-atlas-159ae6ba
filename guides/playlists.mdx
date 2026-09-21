@@ -1,0 +1,308 @@
+---
+title: "Sequential Playlists with Auto-Advance"
+sidebarTitle: "Playlists"
+description: "Play sequential video playlists in better_native_video_player using NativeVideoPlayerPlaylist with auto-advance, per-item resume positions, and manual navigation."
+---
+
+`NativeVideoPlayerPlaylist` is a queue helper that drives a single `NativeVideoPlayerController` through a list of video sources, automatically advancing to the next item when each one completes. Because it reuses one controller — and therefore one native player — all the shared-player benefits apply: PiP, AirPlay, Now Playing, and subtitle rendering work across every item in the queue without any lifecycle gymnastics.
+
+<Info>
+`NativeVideoPlayerPlaylist` relies on the `completed` activity event to advance automatically. If `setLooping(true)` is active on the controller, the video loops indefinitely and never emits `completed`, so auto-advance will not fire. Disable looping before attaching a playlist.
+</Info>
+
+## Creating a Playlist
+
+Pass the controller and a list of `NativeVideoPlayerPlaylistItem` objects to the constructor, then call `start()` to load and play the first item:
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+final playlist = NativeVideoPlayerPlaylist(
+  _controller,
+  items: const [
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://example.com/lesson-1.mp4',
+    ),
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://example.com/lesson-2.mp4',
+      startAt: Duration(minutes: 1, seconds: 30), // per-item resume position
+      headers: {'Authorization': 'Bearer $token'},
+    ),
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://example.com/lesson-3.m3u8',
+      sidecarSubtitles: [
+        NativeVideoPlayerSidecarSubtitle.url(
+          'https://example.com/lesson-3-en.vtt',
+          language: 'en',
+          label: 'English',
+        ),
+      ],
+    ),
+  ],
+);
+
+await playlist.start(); // loads and plays items[0]
+```
+
+### NativeVideoPlayerPlaylistItem fields
+
+<ParamField path="url" type="String" required>
+  Video URL to load. Supports all formats accepted by `NativeVideoPlayerController.load()` — HLS, MP4, `file://`, etc.
+</ParamField>
+
+<ParamField path="startAt" type="Duration?">
+  Resume position applied natively before the first frame of this item. No visible seek occurs after playback starts.
+</ParamField>
+
+<ParamField path="headers" type="Map<String, String>?">
+  HTTP headers sent with this item's video request (e.g. `Authorization`, `Referer`).
+</ParamField>
+
+<ParamField path="drmConfig" type="Map<String, dynamic>?">
+  DRM configuration for protected content. Same schema as `controller.load(drmConfig:)` — `type`, `licenseUrl`, `certificateUrl` (FairPlay), `headers`.
+</ParamField>
+
+<ParamField path="sidecarSubtitles" type="List<NativeVideoPlayerSidecarSubtitle>?">
+  External VTT/SRT subtitle sources loaded together with this item. Rendered in the Flutter subtitle overlay.
+</ParamField>
+
+## Navigating the Playlist
+
+```dart
+// Jump to the next item (no-op at the end of a non-looping queue):
+await playlist.next();
+
+// Jump to the previous item:
+await playlist.previous();
+
+// Jump to any item by index:
+await playlist.playItemAt(2); // zero-based
+
+// Read the current index synchronously:
+print(playlist.currentIndex); // -1 before start(), then 0, 1, …
+
+// React to item changes:
+playlist.currentIndexStream.listen((index) {
+  setState(() => _currentIndex = index);
+});
+```
+
+### Constructor options
+
+<ParamField path="autoAdvance" type="bool" default="true">
+  Automatically load the next item when the current one emits the `completed` event.
+</ParamField>
+
+<ParamField path="loop" type="bool" default="false">
+  Wrap from the last item back to the first when auto-advancing or calling `next()`.
+</ParamField>
+
+## Per-Item Resume Positions
+
+Set `startAt` on each item to restore a stored watch position. The position is applied at the native layer before the first frame, so there is no visible seek jump:
+
+```dart
+final positions = await storage.loadAllPositions();
+
+final playlist = NativeVideoPlayerPlaylist(
+  _controller,
+  items: [
+    for (final video in myVideos)
+      NativeVideoPlayerPlaylistItem(
+        url: video.url,
+        startAt: positions[video.id], // null = start from beginning
+      ),
+  ],
+);
+```
+
+## Persisting Positions with PositionCheckpoints
+
+Pair the playlist with `PositionCheckpoints` to save the current item's position at regular intervals. The checkpoint fires at most once per `interval` while the player advances, plus one final flush when you call `dispose()`.
+
+```dart
+PositionCheckpoints? _checkpoints;
+
+void _onItemChanged(int index) {
+  // Flush the previous item's final position, then start tracking the new one.
+  _checkpoints?.dispose();
+  _checkpoints = PositionCheckpoints(
+    _controller,
+    interval: const Duration(seconds: 5),
+    onCheckpoint: (position) {
+      storage.savePosition(playlist.items[index].url, position);
+    },
+  );
+}
+```
+
+```dart
+// Dispose both together:
+@override
+void dispose() {
+  _checkpoints?.dispose();
+  playlist.dispose();
+  _controller.dispose();
+  super.dispose();
+}
+```
+
+<Tip>
+`PositionCheckpoints.dispose()` always emits the final position before cleaning up, so the exact second the user stopped watching is never lost — even mid-item.
+</Tip>
+
+## Detaching the Playlist
+
+Call `playlist.dispose()` when you no longer need sequential playback. This removes the internal `completed` listener from the controller and closes the `currentIndexStream`, but does **not** stop current playback or dispose the controller:
+
+```dart
+playlist.dispose(); // detach; controller keeps playing the current item
+```
+
+## Full Example: Playlist Screen with Navigation Controls
+
+The snippet below mirrors the demo in `example/lib/screens/perf/playlist_screen.dart`.
+
+```dart
+import 'dart:async';
+
+import 'package:better_native_video_player/better_native_video_player.dart';
+import 'package:flutter/material.dart';
+
+class PlaylistScreen extends StatefulWidget {
+  const PlaylistScreen({super.key});
+
+  @override
+  State<PlaylistScreen> createState() => _PlaylistScreenState();
+}
+
+class _PlaylistScreenState extends State<PlaylistScreen> {
+  late final NativeVideoPlayerController _controller;
+  late final NativeVideoPlayerPlaylist _playlist;
+  StreamSubscription<int>? _indexSub;
+  int _index = -1;
+
+  static const _items = [
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+    ),
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://media.w3.org/2010/05/video/movie_300.mp4',
+      startAt: Duration(seconds: 30),
+    ),
+    NativeVideoPlayerPlaylistItem(
+      url: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/'
+          'bipbop_16x9/bipbop_16x9_variant.m3u8',
+    ),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: false,
+    );
+
+    _playlist = NativeVideoPlayerPlaylist(
+      _controller,
+      items: _items,
+    );
+
+    _indexSub = _playlist.currentIndexStream.listen((index) {
+      if (mounted) setState(() => _index = index);
+    });
+
+    _start();
+  }
+
+  Future<void> _start() async {
+    await _controller.initialize();
+    await _playlist.start();
+  }
+
+  @override
+  void dispose() {
+    _indexSub?.cancel();
+    _playlist.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Playlist')),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ColoredBox(
+              color: Colors.black,
+              child: NativeVideoPlayer(controller: _controller),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Item ${_index + 1} of ${_playlist.items.length}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: _playlist.hasPrevious
+                      ? _playlist.previous
+                      : null,
+                  icon: const Icon(Icons.skip_previous),
+                  label: const Text('Previous'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: _playlist.hasNext
+                      ? _playlist.next
+                      : null,
+                  icon: const Icon(Icons.skip_next),
+                  label: const Text('Next'),
+                ),
+                const Spacer(),
+                // Useful for testing: seek near the end to trigger auto-advance
+                TextButton(
+                  onPressed: () => _controller.seekTo(
+                    _controller.duration - const Duration(seconds: 2),
+                  ),
+                  child: const Text('→ End'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+<Steps>
+  <Step title="Create the controller">
+    `NativeVideoPlayerController` is created once and reused for all items. Use `autoPlay: true` so each item starts playing as soon as it loads.
+  </Step>
+  <Step title="Attach the playlist">
+    `NativeVideoPlayerPlaylist` wraps the controller and registers a `completed` listener. Build your item list with optional `startAt`, `headers`, `drmConfig`, and `sidecarSubtitles` per item.
+  </Step>
+  <Step title="Call start()">
+    `start()` (or `start(index: n)`) loads the first item and begins playback. Auto-advance fires from `completed` events thereafter.
+  </Step>
+  <Step title="Navigate manually">
+    Call `next()`, `previous()`, or `playItemAt(n)` at any time. `currentIndexStream` keeps your UI in sync.
+  </Step>
+  <Step title="Dispose in order">
+    Always dispose `PositionCheckpoints` (if used), then `playlist.dispose()`, then `controller.dispose()` — in that order — to flush the final position and clean up all listeners.
+  </Step>
+</Steps>

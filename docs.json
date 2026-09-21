@@ -1,72 +1,104 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "better_native_video_player",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#254a76",
+    "light": "#33b7f3",
+    "dark": "#04589c"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/5df8c5a9-85cb-4521-bc08-ee035dc054e6.png",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/plug-and-pay/flutter-native-video-player"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/plug-and-pay/flutter-native-video-player"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "platform-setup"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "guides/controller",
+              "guides/widget",
+              "guides/events",
+              "guides/lifecycle"
+            ]
+          },
+          {
+            "group": "Playback Features",
+            "pages": [
+              "guides/loading-video",
+              "guides/playback-controls",
+              "guides/quality-selection",
+              "guides/subtitles",
+              "guides/audio-tracks"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "guides/picture-in-picture",
+              "guides/fullscreen",
+              "guides/drm",
+              "guides/chromecast",
+              "guides/airplay",
+              "guides/offline-downloads",
+              "guides/playlists",
+              "guides/performance"
+            ]
+          },
+          {
+            "group": "Companion Packages",
+            "pages": [
+              "guides/extractor",
+              "guides/analytics"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/native-video-player-controller",
+              "api/native-video-player-widget",
+              "api/native-video-player-config"
+            ]
+          },
+          {
+            "group": "Models & Enums",
+            "pages": [
+              "api/models",
+              "api/events"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "api/services"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

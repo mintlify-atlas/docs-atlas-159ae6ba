@@ -1,20 +1,91 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "better_native_video_player: Flutter Native Video Playback"
+sidebarTitle: "Home"
+description: "A Flutter plugin for native video playback on iOS and Android using AVPlayer and ExoPlayer, with HLS, DRM, Chromecast, AirPlay, PiP, and more."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+**better_native_video_player** is a Flutter plugin that brings true native video playback to iOS and Android. On iOS it uses `AVPlayerViewController`; on Android it uses ExoPlayer (Media3). The result is hardware-accelerated video with adaptive HLS streaming, DRM, Picture-in-Picture, AirPlay, Chromecast, offline downloads, and fine-grained performance tuning — all from a single Dart API.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Add the package and play your first video in minutes
+  </Card>
+  <Card title="Platform Setup" icon="gear" href="/platform-setup">
+    Configure iOS Info.plist and Android permissions
+  </Card>
+  <Card title="Controller API" icon="code" href="/api/native-video-player-controller">
+    Full reference for NativeVideoPlayerController
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="/guides/performance">
+    Config knobs for multi-player feeds and memory management
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What's included
+
+<CardGroup cols={3}>
+  <Card title="HLS Streaming" icon="signal-stream">
+    Adaptive quality selection with viewport-based capping and manual override
+  </Card>
+  <Card title="DRM" icon="lock">
+    FairPlay (iOS), Widevine (Android), AES-128, and ClearKey
+  </Card>
+  <Card title="Picture-in-Picture" icon="window-restore">
+    Automatic and manual PiP on both platforms with state tracking
+  </Card>
+  <Card title="Subtitles" icon="closed-captioning">
+    Embedded HLS tracks + external VTT/SRT sidecar files with full styling
+  </Card>
+  <Card title="Chromecast" icon="cast">
+    Pure-Dart device discovery and full cast session — no Cast SDK required
+  </Card>
+  <Card title="Offline Downloads" icon="download">
+    Download videos with progress streams and replay without network
+  </Card>
+  <Card title="AirPlay" icon="airplay">
+    iOS AirPlay with device availability and connection event tracking
+  </Card>
+  <Card title="Background Playback" icon="music">
+    Now Playing integration on both platforms with lock screen controls
+  </Card>
+  <Card title="Playlists & Analytics" icon="list">
+    Sequential playback, startup metrics, stall tracking, and watched time
+  </Card>
+</CardGroup>
+
+## Quick installation
+
+```yaml pubspec.yaml
+dependencies:
+  better_native_video_player: ^1.5.2
+```
+
+Then run `flutter pub get` and follow the [platform setup guide](/platform-setup) to configure iOS and Android.
+
+## Platform support
+
+| Platform | Minimum Version | Video Engine |
+|----------|----------------|--------------|
+| iOS | 12.0+ | AVFoundation / AVPlayerViewController |
+| Android | API 24+ (Android 7.0) | ExoPlayer (Media3) |
+
+<Note>
+  The package is also WASM compatible — it works with the Flutter Web Assembly runtime.
+</Note>
+
+## Get started
+
+<Steps>
+  <Step title="Install the package">
+    Add `better_native_video_player` to your `pubspec.yaml` and run `flutter pub get`.
+  </Step>
+  <Step title="Configure your platform">
+    Follow the [Platform Setup](/platform-setup) guide to add the required iOS `Info.plist` entries and Android permissions.
+  </Step>
+  <Step title="Create a controller and widget">
+    Create a `NativeVideoPlayerController`, call `initialize()`, load a URL, and embed `NativeVideoPlayer` in your widget tree.
+  </Step>
+  <Step title="Add advanced features">
+    Explore [DRM](/guides/drm), [Chromecast](/guides/chromecast), [offline downloads](/guides/offline-downloads), and [performance tuning](/guides/performance) as needed.
+  </Step>
+</Steps>

@@ -1,0 +1,446 @@
+---
+title: "Playback Analytics, Resume Positions, and Helpers"
+sidebarTitle: "Analytics"
+description: "Track quality-of-experience metrics with PlaybackAnalytics, persist resume positions with PositionCheckpoints, control background playback with BackgroundPlaybackGuard, and show scrub previews with StoryboardThumbnails."
+---
+
+`better_native_video_player` ships several helper classes alongside the core player that cover common production requirements: quality-of-experience analytics, resume-position persistence, background-playback policy, and scrub-bar thumbnail previews. All helpers are lightweight Dart wrappers over the controller's existing event streams — they add no extra platform channels or native traffic, and each one follows the same composable, `dispose()`-on-teardown lifecycle.
+
+---
+
+## PlaybackAnalytics
+
+`PlaybackAnalytics` derives quality-of-experience (QoE) events from the controller's activity and control streams. Attach one instance per controller you want to measure, listen to its `events` broadcast stream, and dispose it together with the controller.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+final analytics = PlaybackAnalytics(controller);
+analytics.events.listen(sendToMetrics);
+```
+
+<ParamField path="controller" type="NativeVideoPlayerController" required>
+  The controller to observe. `PlaybackAnalytics` adds listeners to `controller` and removes them on `dispose()`.
+</ParamField>
+
+<ParamField path="heartbeatInterval" type="Duration" required={false}>
+  How often to emit a `watchedHeartbeat` event while playing. Defaults to 30 seconds. The heartbeat timer stops whenever playback is paused or stalled, so the heartbeat value only advances while frames are actually being rendered.
+</ParamField>
+
+### Event types
+
+| `PlaybackAnalyticsEventType` | `value` field | Description |
+|---|---|---|
+| `startup` | Milliseconds to first frame | Time from `PlaybackAnalytics` construction until the first `playing` state — your video startup latency. |
+| `stallStarted` | — | Playback entered buffering **after** having played at least once. Not fired for initial buffering before first play. |
+| `stallEnded` | Stall duration in ms | Playback resumed after a stall. `event.data['stallCount']` contains the cumulative stall count. |
+| `seeked` | — | A seek completed. `event.data` mirrors the controller's control event data. |
+| `qualityChanged` | — | An adaptive or manual quality switch occurred. `event.data` mirrors the control event data. |
+| `watchedHeartbeat` | Total watched ms so far | Periodic heartbeat; fires at most once per `heartbeatInterval`, only while playing. |
+| `completed` | Total watched ms | Playback reached the end of the video. |
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `stallCount` | `int` | Stalls observed since the analytics instance was created. |
+| `watchedDuration` | `Duration` | Time actually spent playing (paused / stalled time excluded). |
+
+### Code example
+
+```dart
+class AnalyticsPlayerScreen extends StatefulWidget {
+  const AnalyticsPlayerScreen({super.key});
+
+  @override
+  State<AnalyticsPlayerScreen> createState() => _AnalyticsPlayerScreenState();
+}
+
+class _AnalyticsPlayerScreenState extends State<AnalyticsPlayerScreen> {
+  late final NativeVideoPlayerController _controller;
+  late final PlaybackAnalytics _analytics;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _analytics = PlaybackAnalytics(
+      _controller,
+      heartbeatInterval: const Duration(seconds: 30),
+    );
+
+    _analytics.events.listen((event) {
+      switch (event.type) {
+        case PlaybackAnalyticsEventType.startup:
+          MyMetrics.track('video_startup_ms', event.value);
+
+        case PlaybackAnalyticsEventType.stallStarted:
+          MyMetrics.track('video_stall_started');
+
+        case PlaybackAnalyticsEventType.stallEnded:
+          MyMetrics.track('video_stall_ended_ms', event.value);
+
+        case PlaybackAnalyticsEventType.watchedHeartbeat:
+          // Confirm the user is still watching every 30 s.
+          MyMetrics.track('video_watched_ms', event.value);
+
+        case PlaybackAnalyticsEventType.completed:
+          MyMetrics.track('video_completed', event.value);
+          print('Stalls: ${_analytics.stallCount}');
+          print('Watched: ${_analytics.watchedDuration}');
+
+        default:
+          break;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _analytics.dispose();  // removes controller listeners
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return NativeVideoPlayer(controller: _controller);
+  }
+}
+```
+
+---
+
+## PositionCheckpoints
+
+`PositionCheckpoints` throttles the controller's high-frequency `positionStream` into coarse-grained checkpoints suitable for persistence. It fires immediately on the first position update, then at most once per `interval` while playback advances, and always emits a **final checkpoint** from `dispose()` — so the last watched position is never lost even if the user closes the app immediately after pausing.
+
+```dart
+final checkpoints = PositionCheckpoints(
+  controller,
+  interval: const Duration(seconds: 5),
+  onCheckpoint: (position) => storage.savePosition(videoId, position),
+);
+// Later — always dispose together with the controller:
+checkpoints.dispose(); // flushes the final position synchronously
+```
+
+<ParamField path="controller" type="NativeVideoPlayerController" required>
+  The controller whose `positionStream` is observed.
+</ParamField>
+
+<ParamField path="interval" type="Duration" required={false}>
+  Minimum time between two emitted checkpoints. Defaults to 5 seconds.
+</ParamField>
+
+<ParamField path="onCheckpoint" type="void Function(Duration position)?" required={false}>
+  Called synchronously on every checkpoint emission, including the final flush from `dispose()`. Alternatively, listen to the `checkpoints` broadcast stream.
+</ParamField>
+
+### Resume flow
+
+Pass the persisted position back to `controller.load()` as `startAt`. The position is applied natively before the first frame so there is no visible seek after playback begins:
+
+```dart
+final saved = await storage.loadPosition(videoId);
+await controller.load(
+  url: 'https://example.com/video.mp4',
+  startAt: saved,
+);
+```
+
+### Code example: saving to shared_preferences
+
+```dart
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ResumePlayerScreen extends StatefulWidget {
+  const ResumePlayerScreen({required this.videoId, required this.videoUrl, super.key});
+  final String videoId;
+  final String videoUrl;
+
+  @override
+  State<ResumePlayerScreen> createState() => _ResumePlayerScreenState();
+}
+
+class _ResumePlayerScreenState extends State<ResumePlayerScreen> {
+  late final NativeVideoPlayerController _controller;
+  PositionCheckpoints? _checkpoints;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _initPlayer();
+  }
+
+  Future<void> _initPlayer() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMs = prefs.getInt('pos_${widget.videoId}');
+    final startAt = savedMs != null ? Duration(milliseconds: savedMs) : null;
+
+    await _controller.initialize();
+    await _controller.load(url: widget.videoUrl, startAt: startAt);
+
+    // Start checkpointing now that the video is loaded.
+    _checkpoints = PositionCheckpoints(
+      _controller,
+      interval: const Duration(seconds: 5),
+      onCheckpoint: (position) {
+        prefs.setInt('pos_${widget.videoId}', position.inMilliseconds);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _checkpoints?.dispose();   // flushes the last position before closing
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return NativeVideoPlayer(controller: _controller);
+  }
+}
+```
+
+<Note>
+  Always dispose `PositionCheckpoints` **before** `NativeVideoPlayerController`. The final flush reads `controller.positionStream`, which must still be active.
+</Note>
+
+---
+
+## BackgroundPlaybackGuard
+
+`BackgroundPlaybackGuard` pauses playback when the app enters the background and resumes it when the app returns to the foreground — for players that should **not** keep playing audio while hidden. It uses `WidgetsBindingObserver` to track the app lifecycle.
+
+Two important exemptions are built in:
+- **PiP sessions** — a video that has entered Picture-in-Picture continues playing while the app is hidden, which is exactly what the user expects.
+- **AirPlay sessions** — AirPlay is another intentional background-playback path; the guard leaves it alone.
+
+A video the user paused themselves stays paused on return; the guard only resumes playback that it paused itself.
+
+```dart
+final guard = BackgroundPlaybackGuard(controller);
+// ... when the player is torn down:
+guard.dispose();
+```
+
+<ParamField path="controller" type="NativeVideoPlayerController" required>
+  The controller to pause/resume.
+</ParamField>
+
+<ParamField path="pauseInBackground" type="bool" required={false}>
+  Whether backgrounding should pause playback. Defaults to `true`. This is a mutable field, so a settings toggle or per-video preference can flip the behavior at runtime without re-wiring listeners.
+</ParamField>
+
+### Code example
+
+```dart
+class BackgroundAwarePlayerScreen extends StatefulWidget {
+  const BackgroundAwarePlayerScreen({super.key});
+
+  @override
+  State<BackgroundAwarePlayerScreen> createState() =>
+      _BackgroundAwarePlayerScreenState();
+}
+
+class _BackgroundAwarePlayerScreenState
+    extends State<BackgroundAwarePlayerScreen> {
+  late final NativeVideoPlayerController _controller;
+  late final BackgroundPlaybackGuard _guard;
+  bool _pauseInBackground = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _guard = BackgroundPlaybackGuard(_controller);
+  }
+
+  void _toggleBackgroundPolicy(bool value) {
+    setState(() => _pauseInBackground = value);
+    // Flip the guard's policy at runtime — no need to recreate it.
+    _guard.pauseInBackground = value;
+  }
+
+  @override
+  void dispose() {
+    _guard.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(child: NativeVideoPlayer(controller: _controller)),
+        SwitchListTile(
+          title: const Text('Pause when app is backgrounded'),
+          value: _pauseInBackground,
+          onChanged: _toggleBackgroundPolicy,
+        ),
+      ],
+    );
+  }
+}
+```
+
+<Tip>
+  For apps that support background audio (e.g. a podcast or music player), simply don't attach a `BackgroundPlaybackGuard` — the plugin's default behaviour is to keep playing when the app is backgrounded.
+</Tip>
+
+---
+
+## StoryboardThumbnails
+
+`StoryboardThumbnails` provides scrub-bar thumbnail previews. It supports two source formats used across major video platforms: WebVTT storyboard files (Vimeo, Mux, JWPlayer, Roku) and uniform sprite-sheet grids without a VTT index (Vimeo's `thumb_preview`, Bunny Stream's `seek/_N.jpg`). Both are resolved to the same list of `StoryboardThumbnail` entries that map a playback position to an image URL and an optional crop rectangle.
+
+### StoryboardThumbnails.fromUrl()
+
+Downloads and parses a storyboard VTT from a URL. Cue payloads are image URLs, optionally with a `#xywh=x,y,w,h` fragment that selects a tile inside a sprite sheet. Relative URLs are resolved against the VTT file's own URL, matching how browsers process the format.
+
+```dart
+final board = await StoryboardThumbnails.fromUrl(
+  'https://cdn.example.com/storyboard.vtt',
+);
+```
+
+### StoryboardThumbnails.fromUniformGrid()
+
+Builds a storyboard from one or more uniform sprite-sheet images when no VTT index is available. Each frame is evenly spaced across the video duration and occupies one tile in a row-major grid.
+
+<ParamField path="spriteUrls" type="List<String>" required>
+  Sprite-sheet image URLs in order. Each sheet holds up to `framesPerSprite` tiles.
+</ParamField>
+
+<ParamField path="frameInterval" type="Duration" required>
+  Duration represented by each frame (e.g. `Duration(seconds: 5)` if there is one frame per 5 seconds of video).
+</ParamField>
+
+<ParamField path="columns" type="int" required>
+  Number of tile columns per sprite sheet row.
+</ParamField>
+
+<ParamField path="frameWidth" type="double" required>
+  Width of one tile in pixels.
+</ParamField>
+
+<ParamField path="frameHeight" type="double" required>
+  Height of one tile in pixels.
+</ParamField>
+
+<ParamField path="framesPerSprite" type="int" required>
+  Maximum number of frames per sprite sheet. For Vimeo this is the `frames` field from `thumb_preview`; for Bunny it is `columns × rows` (typically 36 for a 6×6 sheet).
+</ParamField>
+
+<ParamField path="totalFrames" type="int?" required={false}>
+  Total frame count across all sheets. Use this to cap the entry list when the last sheet is only partially filled (e.g. pass Vimeo's `frames` value).
+</ParamField>
+
+### thumbnailAt(position)
+
+```dart
+StoryboardThumbnail? thumbnailAt(Duration position)
+```
+
+Returns the `StoryboardThumbnail` whose `start` is at or before `position` (binary search). Returns `null` before the first entry or when the list is empty. The nearest-earlier semantics mean storyboard gaps (cues that don't cover every second) still return a preview rather than nothing.
+
+### StoryboardThumbnail fields
+
+| Field | Type | Description |
+|---|---|---|
+| `start` | `Duration` | Start of this cue's time range. |
+| `end` | `Duration` | End of this cue's time range. |
+| `url` | `String` | Fully resolved image URL. |
+| `region` | `Rect?` | Crop rectangle inside a sprite sheet (`Rect.fromLTWH`). `null` when the cue points at a standalone image. |
+
+### Code example: showing a thumbnail during scrubbing
+
+```dart
+import 'dart:ui' show Rect;
+import 'package:flutter/material.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+class ScrubThumbnailOverlay extends StatelessWidget {
+  const ScrubThumbnailOverlay({
+    required this.board,
+    required this.scrubPosition,
+    super.key,
+  });
+
+  final StoryboardThumbnails board;
+  final Duration scrubPosition;
+
+  @override
+  Widget build(BuildContext context) {
+    final thumb = board.thumbnailAt(scrubPosition);
+    if (thumb == null) return const SizedBox.shrink();
+
+    final region = thumb.region;
+
+    if (region == null) {
+      // Standalone image — show directly.
+      return SizedBox(
+        width: 160,
+        height: 90,
+        child: Image.network(thumb.url, fit: BoxFit.cover),
+      );
+    }
+
+    // Sprite sheet — clip to the correct tile.
+    return SizedBox(
+      width: region.width,
+      height: region.height,
+      child: ClipRect(
+        child: OverflowBox(
+          alignment: Alignment.topLeft,
+          maxWidth: double.infinity,
+          maxHeight: double.infinity,
+          child: Transform.translate(
+            offset: Offset(-region.left, -region.top),
+            child: Image.network(thumb.url, fit: BoxFit.none),
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
+### Using the Vimeo storyboard from ExtractedVideo
+
+When you use `VimeoExtractor`, the returned `ExtractedVideo` may include a storyboard sprite sheet in `video.storyboard`. Pass it directly to `StoryboardThumbnails.fromUniformGrid`:
+
+```dart
+import 'package:better_native_video_extractor/better_native_video_extractor.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+Future<StoryboardThumbnails?> buildStoryboard(ExtractedVideo video) async {
+  final sb = video.storyboard;
+  if (sb == null) return null;
+
+  // Vimeo thumb_preview is a single sprite sheet.
+  return StoryboardThumbnails.fromUniformGrid(
+    spriteUrls: [sb.url],
+    frameInterval: Duration(
+      // Each frame covers (duration / frames) seconds.
+      milliseconds: video.duration == null
+          ? 5000
+          : (video.duration!.inMilliseconds / sb.frames).round(),
+    ),
+    columns: sb.columns,
+    frameWidth: sb.frameWidth,
+    frameHeight: sb.frameHeight,
+    framesPerSprite: sb.frames,
+    totalFrames: sb.frames,
+  );
+}
+```
+
+<Note>
+  Storyboard sprite-sheet URLs from Vimeo carry the same `exp=` token as the stream URLs. If you cache the `ExtractedVideo`, also refresh the storyboard when the token expires, or fetch a fresh `ExtractedVideo` from `VideoExtractionCache` before displaying the scrub preview.
+</Note>

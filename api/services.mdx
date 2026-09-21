@@ -1,0 +1,671 @@
+---
+title: "Service Classes API Reference"
+sidebarTitle: "Services"
+description: "API reference for all service classes: NativeVideoPlayerPlaylist, PlaybackAnalytics, PositionCheckpoints, BackgroundPlaybackGuard, VideoDownloadController, NativeVideoPlayerCache, AirPlayStateManager, StoryboardThumbnails, CastDeviceDiscovery, and CastSession."
+---
+
+Service classes in `better_native_video_player` are composable helpers that layer additional behaviour on top of a `NativeVideoPlayerController` — or operate independently of it. None require subclassing or platform channels of their own; they compose by listening to the controller's existing streams and calling public controller methods. Instantiate the services you need, attach them to your controller, and call `dispose()` when the associated widget or page is torn down.
+
+---
+
+## NativeVideoPlayerPlaylist
+
+`NativeVideoPlayerPlaylist` drives sequential playback of multiple sources through a single controller. It auto-advances when each item completes, supports looping, and emits an index stream so the UI can show which item is playing. Because it reuses one controller, PiP and AirPlay remain uninterrupted between items.
+
+<Accordion title="NativeVideoPlayerPlaylist API">
+
+**Constructor**
+
+```dart
+NativeVideoPlayerPlaylist(
+  NativeVideoPlayerController controller, {
+  required List<NativeVideoPlayerPlaylistItem> items,
+  bool autoAdvance = true,
+  bool loop = false,
+})
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `controller` | `NativeVideoPlayerController` | — | The controller to drive. |
+| `items` | `List<NativeVideoPlayerPlaylistItem>` | — | Ordered list of items. Stored as an immutable snapshot. |
+| `autoAdvance` | `bool` | `true` | Load the next item automatically when the current one completes. |
+| `loop` | `bool` | `false` | Wrap from the last item back to the first. |
+
+**`NativeVideoPlayerPlaylistItem` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | `String` | Video URL (same formats as `controller.load()`). |
+| `headers` | `Map<String, String>?` | Optional HTTP headers for this item. |
+| `drmConfig` | `Map<String, dynamic>?` | Optional DRM configuration. |
+| `sidecarSubtitles` | `List<NativeVideoPlayerSidecarSubtitle>?` | Sidecar subtitles loaded with this item. |
+| `startAt` | `Duration?` | Optional resume position applied before the first frame. |
+
+**Methods**
+
+| Method | Description |
+|--------|-------------|
+| `start({int index = 0})` | Loads and plays from `items[index]`. |
+| `next()` | Advances to the next item (no-op at the end of a non-looping queue). |
+| `previous()` | Goes back to the previous item (no-op before the first item when not looping). |
+| `playItemAt(int index)` | Loads and plays `items[index]` directly. |
+| `dispose()` | Detaches listeners. Does not stop current playback. |
+
+**Properties**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `currentIndex` | `int` | Index of the item currently playing. `-1` before `start()`. |
+| `currentIndexStream` | `Stream<int>` | Broadcast stream that emits whenever a new item starts loading. |
+| `hasNext` | `bool` | Whether there is a next item (respects `loop`). |
+| `hasPrevious` | `bool` | Whether there is a previous item (respects `loop`). |
+| `items` | `List<NativeVideoPlayerPlaylistItem>` | The immutable items snapshot. |
+
+```dart
+final playlist = NativeVideoPlayerPlaylist(
+  controller,
+  items: [
+    const NativeVideoPlayerPlaylistItem(url: 'https://cdn.example.com/ep1.m3u8'),
+    const NativeVideoPlayerPlaylistItem(url: 'https://cdn.example.com/ep2.m3u8'),
+    const NativeVideoPlayerPlaylistItem(url: 'https://cdn.example.com/ep3.m3u8'),
+  ],
+  loop: false,
+);
+
+playlist.currentIndexStream.listen((i) {
+  setState(() => _nowPlayingIndex = i);
+});
+
+await playlist.start(); // begins with episode 1
+```
+
+<Note>
+  Auto-advance relies on the `completed` activity event. If `controller.setLooping(true)` is active the video never completes, so disable looping while a playlist is attached.
+</Note>
+
+</Accordion>
+
+---
+
+## PlaybackAnalytics
+
+`PlaybackAnalytics` derives quality-of-experience (QoE) metrics from the controller's existing event streams — startup time, stall count, watched duration, quality switches, and playback completion — with no additional platform traffic.
+
+<Accordion title="PlaybackAnalytics API">
+
+**Constructor**
+
+```dart
+PlaybackAnalytics(
+  NativeVideoPlayerController controller, {
+  Duration heartbeatInterval = const Duration(seconds: 30),
+})
+```
+
+**`PlaybackAnalyticsEventType` enum**
+
+| Value | `value` field (ms) | Description |
+|-------|-------------------|-------------|
+| `startup` | Startup latency | First frame rendered after `load()`. |
+| `stallStarted` | — | Buffering stall after playback had started. |
+| `stallEnded` | Stall duration | Buffering resolved; playback resumed. |
+| `seeked` | — | User or programmatic seek (extra data from the control event). |
+| `qualityChanged` | — | Adaptive or manual quality switch. |
+| `watchedHeartbeat` | Total watched ms | Periodic heartbeat; fires every `heartbeatInterval` while playing. |
+| `completed` | Total watched ms | Playback reached the end. |
+
+**`PlaybackAnalyticsEvent` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `PlaybackAnalyticsEventType` | The QoE event type. |
+| `value` | `int?` | Millisecond duration, as described per event type. |
+| `data` | `Map<String, dynamic>?` | Additional data (e.g. `stallCount` on `stallEnded`). |
+
+**Properties and methods**
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `events` | `Stream<PlaybackAnalyticsEvent>` | Broadcast stream of QoE events. |
+| `stallCount` | `int` | Total stalls observed since creation. |
+| `watchedDuration` | `Duration` | Total time actually spent playing (pauses and buffers excluded). |
+| `dispose()` | — | Removes listeners and closes the event stream. |
+
+```dart
+final analytics = PlaybackAnalytics(controller);
+
+analytics.events.listen((event) {
+  switch (event.type) {
+    case PlaybackAnalyticsEventType.startup:
+      metricsService.recordStartup(event.value!);
+    case PlaybackAnalyticsEventType.stallStarted:
+      metricsService.incrementStalls();
+    case PlaybackAnalyticsEventType.completed:
+      metricsService.recordWatchTime(analytics.watchedDuration);
+    default:
+      break;
+  }
+});
+```
+
+</Accordion>
+
+---
+
+## PositionCheckpoints
+
+`PositionCheckpoints` throttles position updates and emits them at a configurable interval, making it straightforward to persist a resume position without hammering storage on every time-update event. A final checkpoint is always emitted from `dispose()` so the last watched position is never lost.
+
+<Accordion title="PositionCheckpoints API">
+
+**Constructor**
+
+```dart
+PositionCheckpoints(
+  NativeVideoPlayerController controller, {
+  Duration interval = const Duration(seconds: 5),
+  void Function(Duration position)? onCheckpoint,
+})
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `controller` | Controller whose `positionStream` is observed. |
+| `interval` | Minimum time between two emitted checkpoints (default 5 seconds). |
+| `onCheckpoint` | Optional callback invoked on each checkpoint in addition to the stream. |
+
+**Properties and methods**
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `checkpoints` | `Stream<Duration>` | Broadcast stream of throttled position updates. |
+| `lastPosition` | `Duration?` | Most recently observed position (may be newer than the last checkpoint). |
+| `dispose()` | — | Emits one final checkpoint for the last known position, then stops listening. |
+
+```dart
+final checkpoints = PositionCheckpoints(
+  controller,
+  interval: const Duration(seconds: 10),
+  onCheckpoint: (pos) => prefs.setInt(videoId, pos.inMilliseconds),
+);
+
+// Later, load with saved position:
+final savedMs = prefs.getInt(videoId) ?? 0;
+await controller.load(
+  url: videoUrl,
+  startAt: Duration(milliseconds: savedMs),
+);
+
+// When the page is torn down:
+checkpoints.dispose(); // flushes the final position
+```
+
+</Accordion>
+
+---
+
+## BackgroundPlaybackGuard
+
+`BackgroundPlaybackGuard` pauses playback when the app is backgrounded and resumes it on return, for controllers that should NOT keep playing audio in the background. PiP and AirPlay sessions are explicitly exempted — those are exactly the cases where background audio must continue.
+
+<Accordion title="BackgroundPlaybackGuard API">
+
+**Constructor**
+
+```dart
+BackgroundPlaybackGuard(
+  NativeVideoPlayerController controller, {
+  bool pauseInBackground = true,
+})
+```
+
+**Properties and methods**
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `pauseInBackground` | `bool` | Whether backgrounding pauses playback. **Mutable** — flip this at runtime via a settings toggle without re-wiring listeners. |
+| `dispose()` | — | Unregisters the `WidgetsBindingObserver`. |
+
+**Exemption rules**
+
+- If the controller has PiP active (`controller.isPipEnabled`) when the app is backgrounded, the guard does **not** pause.
+- If `AirPlayStateManager.instance.isAirPlayConnected` is `true`, the guard does **not** pause.
+- Only resumes playback if it was the guard itself that paused — a video the user paused manually stays paused.
+
+```dart
+final guard = BackgroundPlaybackGuard(controller);
+
+// Allow the user to disable background pause in settings:
+void onToggleBackgroundPause(bool enabled) {
+  guard.pauseInBackground = enabled;
+}
+
+@override
+void dispose() {
+  guard.dispose();
+  controller.dispose();
+  super.dispose();
+}
+```
+
+<Tip>
+  Combine `BackgroundPlaybackGuard` with `PositionCheckpoints` so the resume position is always persisted before the app is backgrounded.
+</Tip>
+
+</Accordion>
+
+---
+
+## VideoDownloadController
+
+`VideoDownloadController` downloads single-file progressive video sources (MP4, WebM, and similar) for offline playback. Completed downloads are recorded in a JSON index file that survives app restarts, and you play them back with `controller.loadFile(path: download.filePath)`.
+
+<Accordion title="VideoDownloadController API">
+
+**Constructor**
+
+```dart
+VideoDownloadController({required String directoryPath})
+```
+
+`directoryPath` is where downloaded files and the index live. Use `path_provider`'s `getApplicationDocumentsDirectory()` and append a subdirectory — the plugin deliberately does not depend on `path_provider`.
+
+**Methods**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `download({required String id, required String url, Map<String, String>? headers})` | `Stream<VideoDownloadProgress>` | Starts (or replays completion of) the download for `id`. One concurrent download per ID; a second call while active returns the same stream. |
+| `cancel(String id)` | `Future<void>` | Cancels an in-flight download and removes its partial file. |
+| `remove(String id)` | `Future<void>` | Cancels if in-flight, deletes the completed file, and forgets the index entry. |
+| `listDownloads()` | `Future<List<VideoDownload>>` | Returns completed downloads, newest first. |
+| `localPathFor(String id)` | `Future<String?>` | The local file path for a completed download, or `null`. |
+| `isDownloaded(String id)` | `Future<bool>` | Whether `id` has a completed, still-present file. |
+
+`VideoDownloadProgress` is described in the [Models reference](/api/models#videodownload).
+
+```dart
+final downloader = VideoDownloadController(
+  directoryPath: '${appDocDir.path}/video_downloads',
+);
+
+// Start a download
+downloader.download(
+  id: 'lesson-42',
+  url: 'https://cdn.example.com/lesson42.mp4',
+).listen((progress) {
+  switch (progress.status) {
+    case VideoDownloadStatus.downloading:
+      setState(() => _downloadFraction = progress.fraction);
+    case VideoDownloadStatus.completed:
+      print('Saved to ${progress.id}');
+    case VideoDownloadStatus.failed:
+      print('Error: ${progress.error}');
+    default:
+      break;
+  }
+});
+
+// Later: play offline
+final path = await downloader.localPathFor('lesson-42');
+if (path != null) {
+  await controller.loadFile(path: path);
+  await controller.play();
+}
+```
+
+<Warning>
+  HLS playlists are not downloadable with this controller. For offline HLS you need the native platform downloaders (AVAssetDownloadTask on iOS, Media3 DownloadManager on Android). Use the Vimeo/Bunny extractor package's `progressiveUrl` for single-file sources from those CDNs.
+</Warning>
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerCache
+
+`NativeVideoPlayerCache` warms the optional Android disk cache (`NativeVideoPlayerConfig.androidEnableDiskCache`) before a video is loaded, reducing startup latency by pre-fetching the first bytes or HLS playlist segments.
+
+<Accordion title="NativeVideoPlayerCache API">
+
+**Static method**
+
+```dart
+static Future<bool> precache(
+  String url, {
+  Map<String, String>? headers,
+  int? maxBytes,
+})
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `url` | The video URL to warm. |
+| `headers` | Optional HTTP headers — use the same headers you will pass to `load()`. |
+| `maxBytes` | Override the `NativeVideoPlayerConfig.androidPrecacheBytes` budget for this URL. |
+
+Returns `true` when the cache was warmed successfully. Returns `false` — without making any platform call — on:
+- Non-Android platforms (iOS, Web).
+- `NativeVideoPlayerConfig.androidEnableDiskCache` being `false`.
+- Any platform-level failure (precache must never break the app).
+
+```dart
+// Enable disk cache globally
+NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+  androidEnableDiskCache: true,
+);
+
+// Warm the cache as items become visible in a feed
+await NativeVideoPlayerCache.precache(nextItem.videoUrl);
+```
+
+<Note>
+  `NativeVideoPlayerCache.precache` is an Android-only optimisation. The call is safe to make on any platform — it simply returns `false` on iOS and Web.
+</Note>
+
+</Accordion>
+
+---
+
+## AirPlayStateManager
+
+`AirPlayStateManager` is a global singleton (accessed via `AirPlayStateManager.instance`) that provides a centralised source of truth for AirPlay state across all video player controllers. Because AirPlay is a system-level feature — the entire app connects to a receiver, not individual players — this manager aggregates state changes from all registered controllers and exposes them as streams.
+
+<Accordion title="AirPlayStateManager API">
+
+**Singleton access**
+
+```dart
+final manager = AirPlayStateManager.instance;
+```
+
+**Initialisation**
+
+```dart
+// Call once at app startup (safe on all platforms)
+await AirPlayStateManager.instance.init();
+```
+
+`init()` is safe to call before any controller is created — it defers detection until the first controller registers.
+
+**Synchronous state getters**
+
+| Getter | Type | Description |
+|--------|------|-------------|
+| `isAirPlayAvailable` | `bool` | An AirPlay receiver is visible on the network. |
+| `isAirPlayConnected` | `bool` | The app is actively streaming to an AirPlay device. |
+| `isAirPlayConnecting` | `bool` | A connection is being established. |
+| `airPlayDeviceName` | `String?` | Friendly name of the connected device, or `null`. |
+
+**Streams** (each replays the current value to new subscribers)
+
+| Stream | Type | Description |
+|--------|------|-------------|
+| `isAirPlayAvailableStream` | `Stream<bool>` | Fires when AirPlay availability changes. |
+| `isAirPlayConnectedStream` | `Stream<bool>` | Fires when the connection state changes. |
+| `isAirPlayConnectingStream` | `Stream<bool>` | Fires while connecting / after connection completes or fails. |
+| `airPlayDeviceNameStream` | `Stream<String?>` | Fires when the connected device name changes. |
+
+**Actions**
+
+| Method | Description |
+|--------|-------------|
+| `showAirPlayPicker()` | Shows the native iOS AirPlay device picker UI. No-op on Android/Web. |
+| `disconnectAirPlay()` | Disconnects from the current AirPlay device. No-op on Android/Web. |
+| `dispose()` | Stops detection and closes all stream controllers (call only at app shutdown). |
+
+```dart
+// Show an AirPlay button only when a receiver is available
+StreamBuilder<bool>(
+  stream: AirPlayStateManager.instance.isAirPlayAvailableStream,
+  builder: (context, snap) {
+    if (snap.data != true) return const SizedBox.shrink();
+    return IconButton(
+      icon: const Icon(Icons.airplay),
+      onPressed: () => AirPlayStateManager.instance.showAirPlayPicker(),
+    );
+  },
+)
+```
+
+<Note>
+  AirPlay is an iOS-only feature. All `AirPlayStateManager` methods are no-ops on Android and Web; stream getters still emit current-value replays so your UI code can be written platform-agnostically.
+</Note>
+
+</Accordion>
+
+---
+
+## StoryboardThumbnails
+
+`StoryboardThumbnails` parses WebVTT storyboard files — the de-facto scrub-bar thumbnail preview format used by Vimeo, Mux, JWPlayer, and Bunny Stream — and answers the question "which thumbnail belongs at position X" via a binary search.
+
+<Accordion title="StoryboardThumbnails API">
+
+**Constructors and factories**
+
+| Factory / Constructor | Description |
+|-----------------------|-------------|
+| `StoryboardThumbnails.fromUrl(String url)` | Downloads and parses a storyboard VTT from `url`. Relative image URLs are resolved against the storyboard's own URL. |
+| `StoryboardThumbnails.parseVtt(String content, {Uri? baseUrl})` | Parses storyboard VTT content synchronously. |
+| `StoryboardThumbnails.fromUniformGrid({spriteUrls, frameInterval, columns, frameWidth, frameHeight, framesPerSprite, totalFrames?})` | Builds a storyboard from uniform sprite-sheet grids (Vimeo / Bunny Stream format — no VTT index needed). |
+
+**`fromUniformGrid` parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `spriteUrls` | `List<String>` | Sprite-sheet image URLs in order. |
+| `frameInterval` | `Duration` | Duration covered by each tile. |
+| `columns` | `int` | Number of tile columns per sprite sheet. |
+| `frameWidth` | `double` | Width of one tile in pixels. |
+| `frameHeight` | `double` | Height of one tile in pixels. |
+| `framesPerSprite` | `int` | Maximum number of frames per sprite sheet. |
+| `totalFrames` | `int?` | Optional cap for partial last sheets. |
+
+**`thumbnailAt` method**
+
+```dart
+StoryboardThumbnail? thumbnailAt(Duration position)
+```
+
+Returns the entry whose start time is at or before `position` (nearest-earlier match). Returns `null` before the first entry or when the storyboard is empty.
+
+**`StoryboardThumbnail` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `start` | `Duration` | Start time this thumbnail covers. |
+| `end` | `Duration` | End time of this thumbnail's window. |
+| `url` | `String` | Image URL (already resolved against the storyboard base URL). |
+| `region` | `Rect?` | Sprite-sheet crop from a `#xywh=x,y,w,h` fragment; `null` means the whole image. |
+
+```dart
+// Load from a VTT storyboard URL
+final storyboard = await StoryboardThumbnails.fromUrl(
+  'https://cdn.example.com/video/thumbnails.vtt',
+);
+
+// On scrub-bar hover / drag
+final thumb = storyboard.thumbnailAt(seekPosition);
+if (thumb != null) {
+  // Display thumb.url, cropped by thumb.region if non-null
+}
+```
+
+</Accordion>
+
+---
+
+## CastDeviceDiscovery
+
+`CastDeviceDiscovery` discovers Google Cast (Chromecast) receivers on the local network via mDNS (`_googlecast._tcp`). On iOS, it uses the plugin's native `NWBrowser` (system Bonjour) to avoid the restricted multicast entitlement; on Android and desktop it uses pure-Dart mDNS.
+
+Import from the separate cast entrypoint:
+
+```dart
+import 'package:better_native_video_player/cast.dart';
+```
+
+<Accordion title="CastDeviceDiscovery API">
+
+**Static method**
+
+```dart
+static Future<List<CastDevice>> discover({
+  Duration timeout = const Duration(seconds: 5),
+})
+```
+
+One-shot scan that resolves after `timeout` with every device found. Throws `CastDiscoveryException` when the network blocks the scan (wrong network, missing Local Network permission on iOS).
+
+**`CastDevice` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` | mDNS service instance — unique per device on the network. |
+| `name` | `String` | Service instance name (often a device identifier). |
+| `friendlyName` | `String?` | Human-readable name from the TXT record's `fn` entry (e.g. `"Living room TV"`). Show this in pickers when present. |
+| `model` | `String?` | Device model from the TXT record's `md` entry (e.g. `"Chromecast Ultra"`). |
+| `host` | `String` | IP address or hostname to connect to. |
+| `port` | `int` | CASTV2 port (usually `8009`). |
+| `displayName` | `String` (getter) | `friendlyName ?? name`. Best label for a picker UI. |
+
+**iOS setup** — add to `Info.plist`:
+
+```xml
+<key>NSLocalNetworkUsageDescription</key>
+<string>Used to find Cast devices on your network.</string>
+<key>NSBonjourServices</key>
+<array>
+  <string>_googlecast._tcp</string>
+</array>
+```
+
+```dart
+try {
+  final devices = await CastDeviceDiscovery.discover(
+    timeout: const Duration(seconds: 6),
+  );
+  for (final device in devices) {
+    print('Found: ${device.displayName} at ${device.host}:${device.port}');
+  }
+} on CastDiscoveryException catch (e) {
+  print('Discovery failed: $e');
+}
+```
+
+</Accordion>
+
+---
+
+## CastSession
+
+`CastSession` represents a live connection to one Chromecast receiver. It launches the default media receiver app and exposes full transport control — load, play, pause, seek, volume, captions, loop — plus `statusStream` so the app stays in sync with receiver-side changes. Implemented in pure Dart over CASTV2 (TLS, hand-framed protobuf) with no Cast SDK dependency.
+
+Import from the cast entrypoint:
+
+```dart
+import 'package:better_native_video_player/cast.dart';
+```
+
+<Accordion title="CastSession API">
+
+**Connecting**
+
+```dart
+static Future<CastSession> connect(
+  CastDevice device, {
+  Duration timeout = const Duration(seconds: 10),
+})
+```
+
+Connects to `device`, launches the media receiver app, and starts keepalive heartbeats. Throws on timeout or TLS failure.
+
+**Transport control**
+
+| Method | Description |
+|--------|-------------|
+| `loadMedia({required contentUrl, contentType?, streamType?, title?, subtitle?, imageUrl?, textTracks?, activeTrackIds?, autoplay?, startAt?})` | Loads media on the receiver with optional metadata and caption tracks. |
+| `play()` | Resumes playback. |
+| `pause()` | Pauses playback. |
+| `stop()` | Stops playback (receiver returns to IDLE). |
+| `seek(Duration position)` | Seeks to `position`. |
+| `setVolume(double level)` | Sets receiver volume 0..1 (the TV/speaker volume). |
+| `setMuted(bool muted)` | Mutes or unmutes the receiver. |
+| `setActiveTracks(List<int> trackIds)` | Enables/disables caption tracks. Pass `[]` to turn captions off. |
+| `setLooping(bool looping)` | Client-side loop: replays the loaded media when it finishes. |
+| `requestStatus()` | Requests a fresh `MEDIA_STATUS` push from the receiver. |
+| `close()` | Disconnects and cleans up the TLS socket. |
+
+**Status**
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `statusStream` | `Stream<CastSessionStatus>` | Receiver state updates (broadcast). Fires for changes made on the TV or by other senders. |
+| `status` | `CastSessionStatus` | Most recent known status. |
+| `isConnected` | `bool` | `false` after `close()` or a connection drop. |
+
+**`CastSessionStatus` fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `playerState` | `String` | `"IDLE"` / `"BUFFERING"` / `"PLAYING"` / `"PAUSED"`. |
+| `position` | `Duration` | Current receiver-side playback position. |
+| `duration` | `Duration?` | Total media duration; `null` until the receiver reports it. |
+| `volumeLevel` | `double` | Receiver volume 0..1. |
+| `muted` | `bool` | Whether the receiver is muted. |
+| `activeTrackIds` | `List<int>` | Currently active caption track IDs. |
+| `idleReason` | `String?` | `"FINISHED"` / `"CANCELLED"` / `"ERROR"` when `playerState` is `"IDLE"`. |
+| `isPlaying` | `bool` (getter) | `playerState == "PLAYING"`. |
+
+**`CastTextTrack` fields** (for caption tracks passed to `loadMedia`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trackId` | `int` | Unique integer ID for this track. |
+| `url` | `String` | HTTPS CORS-accessible VTT URL (the receiver fetches it directly). |
+| `language` | `String` | BCP-47 language code. |
+| `name` | `String?` | Human-readable track name. |
+| `contentType` | `String` | MIME type, default `"text/vtt"`. |
+
+```dart
+// Discover and connect
+final devices = await CastDeviceDiscovery.discover();
+if (devices.isEmpty) return;
+
+final session = await CastSession.connect(devices.first);
+
+session.statusStream.listen((status) {
+  print('${status.playerState} @ ${status.position.inSeconds}s');
+  if (status.playerState == 'IDLE' && status.idleReason == 'FINISHED') {
+    onCastComplete();
+  }
+});
+
+// Load with optional subtitles
+await session.loadMedia(
+  contentUrl: 'https://cdn.example.com/video.mp4',
+  title: 'My Video',
+  imageUrl: 'https://cdn.example.com/poster.jpg',
+  textTracks: [
+    const CastTextTrack(
+      trackId: 1,
+      url: 'https://cdn.example.com/subs/en.vtt',
+      language: 'en',
+      name: 'English',
+    ),
+  ],
+  activeTrackIds: [1], // enable English captions
+);
+
+// Later
+await session.pause();
+await session.seek(const Duration(minutes: 5));
+await session.close();
+```
+
+<Warning>
+  `CastTextTrack` URLs must be HTTPS and served with permissive CORS headers — the Chromecast receiver fetches them directly from its own network context, not through your app.
+</Warning>
+
+</Accordion>

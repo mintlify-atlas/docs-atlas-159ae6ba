@@ -1,0 +1,244 @@
+---
+title: "NativeVideoPlayerConfig API Reference"
+sidebarTitle: "Config"
+description: "Global performance configuration for better_native_video_player. Set NativeVideoPlayerConfig.global before creating controllers to tune concurrent players, buffers, disk cache, and texture mode."
+---
+
+`NativeVideoPlayerConfig` holds all global, opt-in performance and behaviour tuning knobs for the plugin. Every default preserves the plugin's out-of-the-box behaviour, so you only override the fields you care about. Set `NativeVideoPlayerConfig.global` once at app startup — before creating any controllers — and the new values take effect for all subsequent player creation and load calls.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+```
+
+---
+
+## Setting the global config
+
+```dart
+void main() {
+  NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+    maxConcurrentPlayingPlayers: 3,
+    timeUpdateInterval: Duration(milliseconds: 250),
+    androidBufferConfig: NativeVideoPlayerAndroidBufferConfig.feed(),
+    iosBufferConfig: NativeVideoPlayerIosBufferConfig.feed(),
+    androidEnableDiskCache: true,
+  );
+
+  runApp(const MyApp());
+}
+```
+
+<Note>
+  `NativeVideoPlayerConfig` is `@immutable` — every call creates a new instance with `const`. The `global` static field is a regular mutable reference; reassign it to change the active config. Changes to `maxConcurrentPlayingPlayers` take effect on the next playback-state transition; buffer settings and other per-player options apply to players created after the update.
+</Note>
+
+---
+
+## Concurrency and timing
+
+<ParamField path="maxConcurrentPlayingPlayers" type="int?" default="null (unlimited)">
+  Maximum number of players allowed to play simultaneously. When a new player starts playing and the cap is exceeded, the least-recently-played player is paused (never disposed or released). Players in Picture-in-Picture or connected to AirPlay are exempt. If only exempt players remain, the cap is allowed to be exceeded (soft cap). Highly recommended for feed UIs where devices support only a handful of concurrent hardware decode sessions.
+
+  ```dart
+  NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+    maxConcurrentPlayingPlayers: 2,
+  );
+  ```
+</ParamField>
+
+<ParamField path="timeUpdateInterval" type="Duration" default="Duration(milliseconds: 500)">
+  Interval between `timeUpdated` control events (and the resulting `positionStream` emissions) while playing. Applies to players created after the config is set. Larger intervals reduce per-player channel traffic and main-thread wakeups in multi-player feeds.
+</ParamField>
+
+---
+
+## Adaptive quality
+
+<ParamField path="qualityForViewportSize" type="bool" default="false">
+  Caps adaptive HLS quality selection to each player's on-screen physical pixel size. By default, ABR selects quality for a full-screen viewport, so a feed of small tiles can decode several 1080p streams at once. With this enabled, each platform view reports its physical pixel dimensions and the player constrains variant selection accordingly (`TrackSelectionParameters.setViewportSize` on Android, `AVPlayerItem.preferredMaximumResolution` on iOS). The cap is lifted automatically in native fullscreen and during AirPlay external playback. Manual `setQuality()` is never constrained. Has no effect on single-variant MP4 sources.
+</ParamField>
+
+<ParamField path="viewportCapHeadroom" type="double" default="1.5">
+  Headroom multiplier for the iOS viewport quality cap. iOS's `preferredMaximumResolution` has fit-under semantics — variants larger than the cap are excluded — so capping at the exact tile size would drop the 720p variant for a tile just below 720px. The default `1.5` keeps the first variant at-or-above the tile selectable (one HLS ladder step of headroom). Set to `1.0` for maximum bandwidth savings. Ignored by Android, which already picks the smallest variant that covers the tile.
+</ParamField>
+
+---
+
+## Playback and view optimizations
+
+<ParamField path="prioritizeActivePlayback" type="bool" default="false">
+  Android only. Lets actively playing players win network/IO contention over paused ones. All players created while this is enabled share one Media3 `PriorityTaskManager`: playing players load at `C.PRIORITY_PLAYBACK`, paused/idle players are demoted to `C.PRIORITY_PLAYBACK_PRELOAD`. Visual quality is unaffected; paused players simply buffer later.
+</ParamField>
+
+<ParamField path="lightweightInlineViews" type="bool" default="false">
+  Hosts a bare video surface (`AVPlayerLayer` on iOS, `SurfaceView` on Android) instead of the full `AVPlayerViewController` / Media3 `PlayerView` for views created with native controls hidden. Noticeably cheaper to create, lay out, and tear down in scroll feeds. Everything else keeps working: PiP, Now Playing, native fullscreen, subtitles, and native sidecar caption rendering. Applies to platform views created after the config is set.
+
+  <Warning>
+    Calling `setShowNativeControls(true)` at runtime is ignored for a view created in lightweight mode — recreate the player view with `showNativeControls: true` instead.
+  </Warning>
+</ParamField>
+
+---
+
+## Texture rendering mode
+
+Texture-rendered tiles are ordinary Flutter content: the per-tile hybrid-composition cost disappears and raster caching works. Both modes require Flutter 3.27+.
+
+<ParamField path="androidTextureMode" type="bool" default="false">
+  Renders Android players as Flutter engine textures (`SurfaceProducer` path) instead of platform views. Views with native controls (`showNativeControls: true`) and Dart-fullscreen host views keep using platform views. Native fullscreen is replaced by Dart fullscreen for texture views. Applies to views created after the config is set.
+</ParamField>
+
+<ParamField path="iosTextureMode" type="bool" default="false">
+  Renders eligible iOS players as Flutter engine textures (`AVPlayerItemVideoOutput` path) instead of platform views. Controllers with `allowsPictureInPicture: true` AND `canStartPictureInPictureAutomatically: true` (both default `true`) keep using platform views so automatic PiP on backgrounding works unchanged. Manual `enterPictureInPicture()` on a texture tile transparently swaps to a platform view first. FairPlay DRM content cannot render to textures. Applies to views created after the config is set.
+</ParamField>
+
+---
+
+## Disk cache (Android)
+
+<ParamField path="androidEnableDiskCache" type="bool" default="false">
+  Caches remote media on disk so revisited feed items skip the network (Android only). Uses a single Media3 `SimpleCache` with LRU eviction shared by all players. Cache reads/writes happen transparently during playback. DRM-protected streams and local sources always bypass the cache. The cache is created at first use and persists for the process lifetime.
+</ParamField>
+
+<ParamField path="androidDiskCacheMaxBytes" type="int" default="104857600 (100 MB)">
+  Maximum disk cache size in bytes. LRU eviction keeps the cache under this bound. The limit applies when the cache is first created; size changes take effect on the next app start.
+</ParamField>
+
+<ParamField path="androidPrecacheBytes" type="int" default="2097152 (2 MB)">
+  Default byte budget for `NativeVideoPlayerCache.precache()`. Progressive sources cache their first bytes; HLS warms the playlists plus leading segments up to this budget.
+</ParamField>
+
+---
+
+## Decoder settings (Android)
+
+<ParamField path="androidForceSoftwareDecoders" type="bool" default="false">
+  Restricts MediaCodec selection to software decoders (`OMX.google.*` / `c2.android.*`). Intended as a per-device compatibility switch for vendor hardware decoders that initialize fine but decode incorrectly or stall. If no software decoder exists for a MIME type, the regular decoder list is used. Costs CPU/battery; not recommended as an app-wide default.
+</ParamField>
+
+---
+
+## iOS player cap
+
+<ParamField path="iosMaxTotalPlayers" type="int" default="6">
+  Maximum number of live `AVPlayer` instances kept allocated. `maxConcurrentPlayingPlayers` bounds how many play at once, but paused players keep their `AVPlayerItem` alive — iOS has a finite media decode pipeline, so enough live items causes new ones to fail to load. When creating a player would exceed this cap, the least-recently-used non-playing, non-PiP, non-AirPlay player is torn down natively and its controller is notified. The next `play()` on that controller transparently reloads the last source at the pre-eviction position. Android ignores this field.
+</ParamField>
+
+---
+
+## Timeout watchdogs
+
+<ParamField path="loadTimeout" type="Duration?" default="Duration(seconds: 30)">
+  Maximum time a player may stay in `initializing` or `loading` state before the controller gives up. A stalled native pipeline emits no event, so without this the Dart state stays `loading` forever. On expiry the controller synthesizes a native-shaped error event (`'Load timed out after Ns'`) and best-effort pauses the pipeline. Set to `null` to disable the watchdog entirely.
+</ParamField>
+
+<ParamField path="bufferingTimeout" type="Duration?" default="null (disabled)">
+  Maximum time a player may remain in the `buffering` state before surfacing an error. Same contract as `loadTimeout`, but armed only on buffering. Disabled by default because long rebuffers on slow networks usually recover; enable it for feeds where a spinner-forever tile is worse than an explicit error state.
+</ParamField>
+
+---
+
+## Buffer configuration
+
+### NativeVideoPlayerAndroidBufferConfig
+
+Tunes ExoPlayer's `DefaultLoadControl` parameters. Constructing this without arguments matches Media3 1.5.0's defaults exactly — no behaviour change. Use `.feed()` for multi-player feeds.
+
+```dart
+NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+  androidBufferConfig: NativeVideoPlayerAndroidBufferConfig.feed(),
+);
+```
+
+<ParamField path="minBufferMs" type="int" default="50000">
+  Minimum buffered media the player tries to maintain, in milliseconds.
+</ParamField>
+
+<ParamField path="maxBufferMs" type="int" default="50000">
+  Maximum buffered media, in milliseconds.
+</ParamField>
+
+<ParamField path="bufferForPlaybackMs" type="int" default="2500">
+  Buffer required before starting playback from a cold start, in milliseconds.
+</ParamField>
+
+<ParamField path="bufferForPlaybackAfterRebufferMs" type="int" default="5000">
+  Buffer required to resume after a rebuffer, in milliseconds.
+</ParamField>
+
+**`.feed()` preset values:**
+
+| Field | Value |
+|---|---|
+| `minBufferMs` | 15 000 ms |
+| `maxBufferMs` | 30 000 ms |
+| `bufferForPlaybackMs` | 1 500 ms |
+| `bufferForPlaybackAfterRebufferMs` | 3 000 ms |
+
+### NativeVideoPlayerIosBufferConfig
+
+Tunes AVPlayer's forward buffer. Constructing with no arguments leaves AVPlayer's automatic buffer management unchanged.
+
+```dart
+NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+  iosBufferConfig: NativeVideoPlayerIosBufferConfig.feed(),
+);
+```
+
+<ParamField path="preferredForwardBufferDuration" type="double?" default="null (AVPlayer automatic)">
+  Preferred forward buffer in seconds. `null` lets AVPlayer choose automatically based on network conditions. The `.feed()` preset sets this to `15` seconds.
+</ParamField>
+
+<ParamField path="automaticallyWaitsToMinimizeStalling" type="bool" default="true">
+  Maps directly to `AVPlayer.automaticallyWaitsToMinimizeStalling`. Leave `true` (default) unless you need immediate playback starts at the cost of potential stalls.
+</ParamField>
+
+**`.feed()` preset values:**
+
+| Field | Value |
+|---|---|
+| `preferredForwardBufferDuration` | 15 s |
+| `automaticallyWaitsToMinimizeStalling` | `true` |
+
+---
+
+## Recommended feed configuration
+
+The following configuration is a good starting point for a vertically scrolling video feed with multiple simultaneous players:
+
+```dart
+NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+  // Cap concurrent playback to avoid hardware decoder exhaustion
+  maxConcurrentPlayingPlayers: 3,
+
+  // Reduce channel traffic: position updates every 250ms is plenty for a progress bar
+  timeUpdateInterval: Duration(milliseconds: 250),
+
+  // Smaller buffers so N players don't each buffer up to 50s of media
+  androidBufferConfig: NativeVideoPlayerAndroidBufferConfig.feed(),
+  iosBufferConfig: NativeVideoPlayerIosBufferConfig.feed(),
+
+  // Cache visited items on Android so swiping back is instant
+  androidEnableDiskCache: true,
+  androidDiskCacheMaxBytes: 200 * 1024 * 1024, // 200 MB
+
+  // Playing players take priority over paused ones for network I/O
+  prioritizeActivePlayback: true,
+
+  // Skip full player UI for tiles with custom overlays
+  lightweightInlineViews: true,
+
+  // Cap quality to the tile's physical pixel size (saves bandwidth on small tiles)
+  qualityForViewportSize: true,
+
+  // Keep iOS from exhausting its decoder pipeline in long sessions
+  iosMaxTotalPlayers: 8,
+
+  // Texture rendering removes the hybrid-composition overhead per tile
+  androidTextureMode: true,
+);
+```
+
+<Tip>
+  Enable `androidTextureMode` and `lightweightInlineViews` together for the largest performance gain on Android feeds. On iOS, `lightweightInlineViews` combined with `iosMaxTotalPlayers` and the `.feed()` buffer preset is the most impactful combination.
+</Tip>

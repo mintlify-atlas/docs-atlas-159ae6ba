@@ -1,0 +1,187 @@
+---
+title: "HLS Quality Selection and Adaptive Streaming"
+sidebarTitle: "Quality"
+description: "Select HLS quality variants manually or let better_native_video_player adapt automatically. Use viewport-based quality capping to save bandwidth in multi-player feeds."
+---
+
+HLS streams embed multiple quality variants (bitrate ladders) in the master manifest. `better_native_video_player` exposes those variants as `NativeVideoPlayerQuality` objects and lets you either let the native ABR engine choose automatically or lock to a specific variant manually. For feeds with many simultaneous players you can also cap each player's variant selection to its on-screen tile size, which dramatically reduces memory and bandwidth usage.
+
+## Reading Available Qualities
+
+Qualities are populated when the HLS manifest is parsed, which happens inside `load` / `loadUrl`. After the load completes the list is available synchronously on `controller.qualities`, and future updates emit on `qualitiesStream`.
+
+```dart
+// Synchronous read (safe to call after load() completes)
+final List<NativeVideoPlayerQuality> qualities = controller.qualities;
+
+for (final quality in qualities) {
+  print('${quality.label} — ${quality.width}x${quality.height} '
+        '@ ${quality.bitrate} bps (auto: ${quality.isAuto})');
+}
+
+// Reactive — emits the full list whenever it changes
+controller.qualitiesStream.listen((List<NativeVideoPlayerQuality> qs) {
+  setState(() => _qualities = qs);
+});
+```
+
+## `NativeVideoPlayerQuality` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `label` | `String` | Human-readable label, e.g. `"1280x720"` or `"Auto"` |
+| `url` | `String` | Variant playlist URL (empty for the auto entry) |
+| `bitrate` | `int?` | Peak bitrate in bits per second |
+| `width` | `int?` | Horizontal resolution pixels, parsed from the label |
+| `height` | `int?` | Vertical resolution pixels, parsed from the label |
+| `isAuto` | `bool` | `true` for the ABR auto-select entry |
+
+## Selecting a Quality
+
+Call `setQuality` with any entry from `controller.qualities`. Switching quality causes the native player to load the corresponding variant playlist immediately; playback continues from the current position without interruption on most streams.
+
+```dart
+// Select the highest-bitrate variant
+final highest = controller.qualities
+    .where((q) => !q.isAuto)
+    .reduce((a, b) => (a.bitrate ?? 0) >= (b.bitrate ?? 0) ? a : b);
+await controller.setQuality(highest);
+
+// Select a specific height (e.g., 720p)
+final hd = controller.qualities.firstWhere(
+  (q) => q.height == 720,
+  orElse: () => controller.qualities.first,
+);
+await controller.setQuality(hd);
+```
+
+## Automatic Quality (ABR)
+
+Each quality list includes one entry with `isAuto: true`. Selecting it re-engages the native ABR engine after a manual override, letting AVFoundation or ExoPlayer pick the best variant based on measured network bandwidth.
+
+```dart
+// Re-engage native ABR
+final auto = controller.qualities.firstWhere(
+  (q) => q.isAuto,
+  orElse: NativeVideoPlayerQuality.auto,
+);
+await controller.setQuality(auto);
+```
+
+You can also use the factory constructor directly when building a "Auto" option in your UI:
+
+```dart
+await controller.setQuality(NativeVideoPlayerQuality.auto());
+```
+
+## Tracking Quality Changes
+
+`qualityChangedStream` emits a `NativeVideoPlayerQuality` each time the active variant changes — both from ABR switches and from explicit `setQuality` calls. This is useful for logging quality-of-experience metrics.
+
+```dart
+controller.qualityChangedStream.listen((NativeVideoPlayerQuality q) {
+  analytics.trackQualitySwitch(
+    label: q.label,
+    bitrate: q.bitrate,
+    resolution: '${q.width}x${q.height}',
+  );
+});
+```
+
+The same information also arrives via the control event listener:
+
+```dart
+controller.addControlListener((PlayerControlEvent event) {
+  if (event.state == PlayerControlState.qualityChanged) {
+    final quality = event.data?['quality'];
+    print('Quality changed to $quality');
+  }
+});
+```
+
+## Viewport-Based Quality Cap
+
+For feeds that show many inline video tiles simultaneously, capping each player's ABR to its visible tile size avoids decoding several full-resolution streams in parallel. Enable it globally before creating any controllers:
+
+```dart
+NativeVideoPlayerConfig.global = const NativeVideoPlayerConfig(
+  qualityForViewportSize: true,
+
+  // iOS multiplier: 1.5 keeps the next variant above the tile
+  // selectable (visually lossless). Set 1.0 for maximum savings.
+  viewportCapHeadroom: 1.5,
+);
+```
+
+### How It Works
+
+When `qualityForViewportSize` is `true`, each player reports its on-screen pixel dimensions to the native side and the ABR engine is instructed to select no higher than the capped variant. On a Galaxy S21 with six concurrent players this measured **−58% Dalvik heap** (172 MB → 77 MB) and converted an OOM-crash sequence into a survivable one.
+
+### When the Cap Is Lifted Automatically
+
+The viewport cap is **removed automatically** in these situations so quality never degrades during important viewing contexts:
+
+- The player enters **fullscreen** (native or Dart)
+- The player starts an **AirPlay** session
+- The user calls `setQuality` manually — a manual selection is never constrained
+
+<Note>
+  The viewport cap applies only to ABR variant selection, not to an explicit `setQuality` call. Manual overrides always take effect regardless of tile size.
+</Note>
+
+## Building a Quality Picker
+
+```dart
+class QualityPickerButton extends StatelessWidget {
+  final NativeVideoPlayerController controller;
+  const QualityPickerButton({required this.controller, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final qualities = controller.qualities;
+    if (qualities.isEmpty) return const SizedBox.shrink();
+
+    return PopupMenuButton<NativeVideoPlayerQuality>(
+      icon: const Icon(Icons.hd, color: Colors.white),
+      tooltip: 'Quality',
+      onSelected: (quality) => controller.setQuality(quality),
+      itemBuilder: (_) => [
+        // Auto option at the top
+        PopupMenuItem(
+          value: NativeVideoPlayerQuality.auto(),
+          child: const Text('Auto'),
+        ),
+        // Specific variants sorted by height descending
+        ...qualities
+            .where((q) => !q.isAuto)
+            .toList()
+          ..sort((a, b) => (b.height ?? 0).compareTo(a.height ?? 0))
+          ..map(
+            (q) => PopupMenuItem(
+              value: q,
+              child: Row(
+                children: [
+                  Text(q.label),
+                  if (q.bitrate != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '${(q.bitrate! / 1000000).toStringAsFixed(1)} Mbps',
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+```
+
+<Tip>
+  Combine `qualityChangedStream` with your picker's selected state so the UI always reflects the currently active variant, including automatic ABR switches that happen without user interaction.
+</Tip>

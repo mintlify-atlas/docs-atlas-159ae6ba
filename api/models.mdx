@@ -1,0 +1,390 @@
+---
+title: "Data Models API Reference"
+sidebarTitle: "Models"
+description: "All data model classes in better_native_video_player: quality, subtitle tracks, audio tracks, sidecar subtitles, media info, playback range, download, and video size."
+---
+
+Every piece of information the plugin surfaces — from a buffered position to the currently connected AirPlay device — is expressed as one of the typed model classes described on this page. Understanding these types is the foundation for building a UI: you read them from `NativeVideoPlayerState`, pass them into controller methods, and compose them to configure playback behaviour such as A-B loops, offline downloads, and custom subtitle styling.
+
+---
+
+## NativeVideoPlayerState
+
+`NativeVideoPlayerState` is the single snapshot of everything the player knows. It is emitted by `NativeVideoPlayerController.stateStream` (and available synchronously via `controller.value`) every time any field changes. All fields are immutable — call `copyWith` to derive a modified copy.
+
+<Accordion title="NativeVideoPlayerState fields">
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `isFullScreen` | `bool` | `false` | Whether the player is currently in fullscreen mode. |
+| `currentPosition` | `Duration` | `Duration.zero` | Current playback position. |
+| `duration` | `Duration` | `Duration.zero` | Total video duration. |
+| `bufferedPosition` | `Duration` | `Duration.zero` | How far ahead the video has been buffered. |
+| `volume` | `double` | `1.0` | Current volume (0.0 to 1.0). |
+| `speed` | `double` | `1.0` | Current playback speed multiplier. |
+| `qualities` | `List<NativeVideoPlayerQuality>` | `[]` | Available HLS quality variants. |
+| `subtitleTracks` | `List<NativeVideoPlayerSubtitleTrack>` | `[]` | Available subtitle/caption tracks. |
+| `activityState` | `PlayerActivityState` | `idle` | Current playback lifecycle state. |
+| `controlState` | `PlayerControlState` | `none` | Most recent control interaction. |
+| `isPipEnabled` | `bool` | `false` | Whether Picture-in-Picture is active. |
+| `isPipAvailable` | `bool` | `false` | Whether PiP is supported on this device. |
+| `isAirplayAvailable` | `bool` | `false` | Whether an AirPlay receiver is reachable. |
+| `isAirplayConnected` | `bool` | `false` | Whether video is streaming to AirPlay. |
+| `isAirplayConnecting` | `bool` | `false` | Whether an AirPlay connection is being established. |
+| `airPlayDeviceName` | `String?` | `null` | Name of the connected AirPlay device, or `null`. |
+
+```dart
+final sub = controller.stateStream.listen((state) {
+  if (state.activityState == PlayerActivityState.playing) {
+    print('Playing at ${state.currentPosition}');
+  }
+  if (state.isAirplayConnected) {
+    print('Casting to ${state.airPlayDeviceName}');
+  }
+});
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerQuality
+
+Represents one HLS quality variant (rendition). The `qualities` list on `NativeVideoPlayerState` is populated once the manifest has been parsed. Pass a quality instance to `controller.setQuality()` to force a specific rendition.
+
+<Accordion title="NativeVideoPlayerQuality fields and constructors">
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `label` | `String` | ✓ | Human-readable name shown in quality pickers (e.g. `"720p"`, `"1280x720"`). |
+| `url` | `String` | ✓ | The rendition playlist URL. Empty string for the auto quality. |
+| `bitrate` | `int?` | — | Peak bitrate in bits per second, when reported by the manifest. |
+| `width` | `int?` | — | Width in pixels. Auto-parsed from resolution labels such as `"1280x720"`. |
+| `height` | `int?` | — | Height in pixels. Auto-parsed from resolution labels. |
+| `isAuto` | `bool` | — | `true` for the adaptive-bitrate (ABR) auto selection. Default `false`. |
+
+**Factory constructors**
+
+- `NativeVideoPlayerQuality.auto()` — returns a sentinel quality representing adaptive bitrate selection (`isAuto: true`, empty URL).
+
+```dart
+// Force 720p
+final q720 = controller.value.qualities.firstWhere((q) => q.label == '720p');
+await controller.setQuality(q720);
+
+// Return to adaptive
+await controller.setQuality(NativeVideoPlayerQuality.auto());
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerSubtitleTrack
+
+Represents a subtitle or closed-caption track available in the current media. Tracks are reported via `NativeVideoPlayerState.subtitleTracks` after the video loads. Use `controller.selectSubtitleTrack()` to activate one.
+
+<Accordion title="NativeVideoPlayerSubtitleTrack fields and constructors">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `int` | Platform-internal track index. `-1` for the "Off" sentinel. |
+| `language` | `String` | BCP-47 language code (e.g. `"en"`, `"fr"`, `"en-US"`). `"off"` for the Off sentinel. |
+| `displayName` | `String` | Human-readable name (e.g. `"English"`, `"Spanish (Latin America)"`). |
+| `isSelected` | `bool` | Whether this track is currently active. |
+| `source` | `SubtitleTrackSource` | Where the track originates. |
+| `isOff` | `bool` (getter) | `true` when this is the Off sentinel (index == -1 and source == embedded). |
+
+**`SubtitleTrackSource` enum**
+
+| Value | Description |
+|-------|-------------|
+| `embedded` | Track is embedded in the media (HLS legible rendition, MP4 text track) and rendered natively by the platform player. |
+| `sidecar` | External VTT/SRT source loaded via `setSidecarSubtitles()`, rendered by the plugin's Flutter overlay. |
+
+**Factory constructors**
+
+- `NativeVideoPlayerSubtitleTrack.off()` — the "Off" / "None" option (index `-1`, language `"off"`, displayName `"Off"`). Pass this to `selectSubtitleTrack` to disable captions.
+
+```dart
+// Disable subtitles
+await controller.selectSubtitleTrack(NativeVideoPlayerSubtitleTrack.off());
+
+// Select English track
+final en = controller.value.subtitleTracks
+    .firstWhere((t) => t.language == 'en');
+await controller.selectSubtitleTrack(en);
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerSidecarSubtitle
+
+Describes an external subtitle file that is loaded alongside a video. Sidecar subtitles are parsed and rendered by the plugin's Flutter overlay and work identically for HLS and MP4 on both platforms.
+
+<Accordion title="NativeVideoPlayerSidecarSubtitle named constructors and fields">
+
+**Named constructors**
+
+| Constructor | Description |
+|-------------|-------------|
+| `.url(url, {language, label, format?})` | Load subtitles from an HTTPS URL. |
+| `.file(filePath, {language, label, format?})` | Load subtitles from a local file path. |
+| `.content(content, {language, label, format?})` | Provide raw subtitle text (already downloaded or bundled). |
+
+**Fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | `String?` | Network URL (set by `.url()`; null otherwise). |
+| `filePath` | `String?` | Local path (set by `.file()`; null otherwise). |
+| `content` | `String?` | Raw text (set by `.content()`; null otherwise). |
+| `language` | `String` | BCP-47 language code (e.g. `"en"`, `"nl"`). |
+| `label` | `String` | Human-readable track name shown in pickers (e.g. `"English"`). |
+| `format` | `SubtitleFormat?` | Explicit format; auto-detected from extension/content when `null`. |
+
+**`SubtitleFormat` enum**
+
+| Value | Description |
+|-------|-------------|
+| `vtt` | WebVTT format (`.vtt`). |
+| `srt` | SubRip format (`.srt`). |
+
+```dart
+// URL-sourced subtitle
+final subtitle = NativeVideoPlayerSidecarSubtitle.url(
+  'https://cdn.example.com/subs/en.vtt',
+  language: 'en',
+  label: 'English',
+);
+
+// Bundled content (e.g. loaded from assets)
+final bundled = NativeVideoPlayerSidecarSubtitle.content(
+  await rootBundle.loadString('assets/subs/en.vtt'),
+  language: 'en',
+  label: 'English',
+  format: SubtitleFormat.vtt,
+);
+
+await controller.load(
+  url: 'https://cdn.example.com/video.m3u8',
+  sidecarSubtitles: [subtitle],
+);
+```
+
+<Note>
+  Sidecar subtitles do not render inside the iOS native fullscreen or iOS PiP window, or on an AirPlay receiver screen. Use embedded HLS tracks when receiver-side captions are required.
+</Note>
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerSubtitleStyle
+
+Controls the visual appearance and position of sidecar subtitle cues rendered by the plugin's Flutter overlay. Pass an instance to the `subtitleStyle` parameter of the `NativeVideoPlayer` widget — the overlay rebuilds immediately when the style changes.
+
+<Accordion title="NativeVideoPlayerSubtitleStyle fields">
+
+**Text appearance**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `fontSize` | `double` | `16` | Cue text font size in logical pixels. |
+| `fontWeight` | `FontWeight` | `w500` | Font weight. |
+| `fontStyle` | `FontStyle` | `normal` | Normal or italic. |
+| `fontFamily` | `String?` | `null` | Custom font family; `null` uses the app default. |
+| `lineHeight` | `double?` | `null` | Line height multiplier (`TextStyle.height`); `null` uses the font default. |
+| `textColor` | `Color` | `0xFFFFFFFF` (white) | Cue text colour. |
+| `backgroundColor` | `Color` | `0xB3000000` (translucent black) | Background behind each cue line. |
+| `outlineColor` | `Color?` | `null` | Optional text outline colour for readability on busy video. |
+| `outlineWidth` | `double` | `0` | Width of the text outline. |
+| `textAlign` | `TextAlign` | `center` | Text alignment within multi-line cues. |
+
+**Position**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `alignment` | `Alignment` | `bottomCenter` | Where the cue block sits on the video surface. |
+| `padding` | `EdgeInsets` | `bottom: 24, left: 16, right: 16` | Space between the cue block and the video edges. |
+
+**Fullscreen landscape overrides**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `fullscreenLandscapeFontSize` | `double?` | `null` | Overrides `fontSize` when fullscreen and in landscape. |
+| `fullscreenLandscapeFontWeight` | `FontWeight?` | `null` | Overrides `fontWeight` in fullscreen landscape. |
+| `fullscreenLandscapeLineHeight` | `double?` | `null` | Overrides `lineHeight` in fullscreen landscape. |
+
+**Embedded track scaling**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `embeddedTextScale` | `double` | `1.0` | Scale for EMBEDDED native subtitle tracks (ExoPlayer `SubtitleView`, AVPlayer captions). `1.0` = platform default. Has no effect on sidecar tracks. |
+
+```dart
+NativeVideoPlayer(
+  controller: controller,
+  subtitleStyle: const NativeVideoPlayerSubtitleStyle(
+    fontSize: 18,
+    textColor: Color(0xFFFFFFFF),
+    backgroundColor: Color(0xCC000000),
+    alignment: Alignment.bottomCenter,
+    padding: EdgeInsets.only(bottom: 32, left: 16, right: 16),
+    fullscreenLandscapeFontSize: 22,
+    embeddedTextScale: 1.2,
+  ),
+)
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerAudioTrack
+
+Represents one of the alternate audio tracks available in the current media (multiple languages, audio description, director commentary). Mirrors the structure of `NativeVideoPlayerSubtitleTrack`. Use `controller.selectAudioTrack()` to switch.
+
+<Accordion title="NativeVideoPlayerAudioTrack fields">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `int` | Platform-internal track index. |
+| `language` | `String` | Language code (e.g. `"en"`, `"nl"`, `"en-US"`). |
+| `displayName` | `String` | Human-readable name (e.g. `"English"`, `"English (audio description)"`). |
+| `isSelected` | `bool` | Whether this track is currently playing. |
+
+```dart
+// Switch to Dutch audio
+final nl = controller.value.subtitleTracks; // audio tracks via controller
+final tracks = await controller.getAudioTracks();
+final dutch = tracks.firstWhere((t) => t.language == 'nl');
+await controller.selectAudioTrack(dutch);
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerMediaInfo
+
+Metadata provided to the platform Now Playing / lock-screen controls. Set via `controller.setMediaInfo()`.
+
+<Accordion title="NativeVideoPlayerMediaInfo fields">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | `String?` | Track / video title. |
+| `subtitle` | `String?` | Secondary label (e.g. series name or episode). |
+| `album` | `String?` | Album or show name. |
+| `artworkUrl` | `String?` | URL of the artwork image shown on the lock screen. |
+
+```dart
+await controller.setMediaInfo(
+  const NativeVideoPlayerMediaInfo(
+    title: 'Episode 3',
+    subtitle: 'My Show — Season 2',
+    artworkUrl: 'https://cdn.example.com/poster.jpg',
+  ),
+);
+```
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerPlaybackRange
+
+Defines an A-B playback range. When set, playback is confined to `start..end`. With `loop: true` the player seeks back to `start` every time `end` is reached. Set via `controller.setPlaybackRange()`; clear with `controller.clearPlaybackRange()`.
+
+<Accordion title="NativeVideoPlayerPlaybackRange fields">
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start` | `Duration` | — | The "A" point — where the loop restarts. |
+| `end` | `Duration` | — | The "B" point — where the loop turns around (or playback pauses). |
+| `loop` | `bool` | `true` | Seek back to `start` at `end` (true) or pause once at `end` (false). |
+
+`end` must be strictly after `start` (enforced by assertion).
+
+The helper method `contains(Duration position)` returns `true` when `position` lies inside `[start, end)`.
+
+```dart
+// Loop a highlight reel between 0:30 and 1:15
+await controller.setPlaybackRange(
+  const NativeVideoPlayerPlaybackRange(
+    start: Duration(seconds: 30),
+    end: Duration(minutes: 1, seconds: 15),
+  ),
+);
+
+// Play the clip once and pause at end
+await controller.setPlaybackRange(
+  const NativeVideoPlayerPlaybackRange(
+    start: Duration(seconds: 10),
+    end: Duration(seconds: 40),
+    loop: false,
+  ),
+);
+```
+
+</Accordion>
+
+---
+
+## VideoDownload
+
+A completed offline download as stored in the `VideoDownloadController` index. Retrieve instances via `controller.listDownloads()`.
+
+<Accordion title="VideoDownload and VideoDownloadProgress fields">
+
+**`VideoDownload`** (a completed entry)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` | Caller-chosen identifier (e.g. your video or lesson ID). |
+| `url` | `String` | Source URL the file was downloaded from. |
+| `filePath` | `String` | Absolute local path — pass to `controller.loadFile(path: ...)` for offline playback. |
+| `sizeBytes` | `int` | File size in bytes. |
+| `completedAt` | `DateTime` | When the download finished. |
+
+**`VideoDownloadProgress`** (a progress update from `download()`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` | The download ID this update belongs to. |
+| `status` | `VideoDownloadStatus` | Current lifecycle phase. |
+| `receivedBytes` | `int` | Bytes written so far. |
+| `totalBytes` | `int?` | Expected size from `Content-Length`; `null` when the server doesn't report it. |
+| `error` | `String?` | Failure description when `status` is `failed`. |
+| `fraction` | `double?` (getter) | Progress 0..1 when `totalBytes` is known; `null` for indeterminate progress. |
+
+**`VideoDownloadStatus` enum**
+
+| Value | Description |
+|-------|-------------|
+| `downloading` | Transfer in progress. |
+| `completed` | File written and indexed. |
+| `failed` | Non-recoverable error. |
+| `canceled` | Stopped by a `cancel()` call. |
+
+</Accordion>
+
+---
+
+## NativeVideoPlayerVideoSize
+
+The native video's display dimensions, reported by the texture-rendered view (Android texture mode / `NativeVideoPlayerConfig.androidTextureMode`). The widget uses these to maintain the correct aspect ratio.
+
+<Accordion title="NativeVideoPlayerVideoSize fields">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `width` | `double` | Display width in pixels (pixel aspect ratio already applied). |
+| `height` | `double` | Display height in pixels. |
+| `rotationCorrection` | `int` | Clockwise degrees (0 / 90 / 180 / 270) the widget must rotate the texture. Non-zero only on engine backends that don't handle rotation natively. |
+| `aspectRatio` | `double` (getter) | Width ÷ height, corrected for `rotationCorrection`. |
+
+</Accordion>

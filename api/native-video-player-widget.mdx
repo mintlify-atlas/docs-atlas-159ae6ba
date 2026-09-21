@@ -1,0 +1,280 @@
+---
+title: "NativeVideoPlayer Widget API Reference"
+sidebarTitle: "Widget"
+description: "API reference for the NativeVideoPlayer Flutter widget: controller, overlayBuilder, overlayFadeDuration, isFullscreenContext, and subtitleStyle parameters."
+---
+
+`NativeVideoPlayer` is the Flutter widget that creates and hosts the native video surface — `AVPlayerViewController` on iOS and an ExoPlayer `PlayerView` (or `SurfaceView` in lightweight mode) on Android. Drop it anywhere in your widget tree alongside a `NativeVideoPlayerController` and the plugin handles the rest: platform view lifecycle, event channel wiring, overlay animations, subtitle rendering, and surface handoff for PiP.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+```
+
+---
+
+## Constructor
+
+```dart
+const NativeVideoPlayer({
+  required NativeVideoPlayerController controller,
+  Widget Function(BuildContext, NativeVideoPlayerController)? overlayBuilder,
+  Duration overlayFadeDuration = const Duration(milliseconds: 300),
+  bool isFullscreenContext = false,
+  NativeVideoPlayerSubtitleStyle subtitleStyle = const NativeVideoPlayerSubtitleStyle(),
+  Key? key,
+})
+```
+
+<ParamField path="controller" type="NativeVideoPlayerController" required>
+  The controller that manages this player. A single controller may be shared between a normal inline widget and a fullscreen host widget — the two platform views share the same underlying native player instance.
+</ParamField>
+
+<ParamField path="overlayBuilder" type="Widget Function(BuildContext, NativeVideoPlayerController)?">
+  Builder for custom controls rendered on top of the video. The widget receives the current `BuildContext` and the controller so it can call `play()`, `pause()`, `seekTo()`, etc. directly.
+
+  When this is non-null:
+  - Native player controls are automatically hidden (`showNativeControls` becomes `false`).
+  - The Dart fullscreen route is used instead of the native fullscreen presentation, so the overlay appears in fullscreen too.
+  - The overlay fades in/out on tap with a 3-second auto-hide timer (configurable via `overlayFadeDuration`).
+  - During Android PiP the overlay is hidden automatically and restored on exit.
+</ParamField>
+
+<ParamField path="overlayFadeDuration" type="Duration" default="Duration(milliseconds: 300)">
+  Controls how long the overlay fade-in and fade-out animations take. Lower values feel snappier; higher values feel smoother.
+</ParamField>
+
+<ParamField path="isFullscreenContext" type="bool" default="false">
+  Set to `true` only when building the widget inside the Dart fullscreen dialog (i.e., inside a `FullscreenVideoPlayer`). This tells iOS to create a dedicated `AVPlayerViewController` for the fullscreen slot instead of moving the shared inline view, and skips auto-PiP logic that should only run for the inline widget.
+</ParamField>
+
+<ParamField path="subtitleStyle" type="NativeVideoPlayerSubtitleStyle" default="const NativeVideoPlayerSubtitleStyle()">
+  Visual style and position for sidecar (external VTT/SRT) subtitles rendered by the plugin's Flutter overlay layer. Rebuild the widget with a new instance to change the style at runtime. See [NativeVideoPlayerSubtitleStyle](#nativevideoplayer-subtitlestyle) below for all fields.
+</ParamField>
+
+---
+
+## Usage examples
+
+<Tabs>
+  <Tab title="Basic">
+    The simplest usage: a player with native controls and no custom overlay.
+
+    ```dart
+    NativeVideoPlayer(
+      controller: _controller,
+    )
+    ```
+  </Tab>
+  <Tab title="Custom overlay">
+    Provide an `overlayBuilder` to render custom controls on top of the video. The overlay fades out after 3 seconds of inactivity and reappears on tap.
+
+    ```dart
+    NativeVideoPlayer(
+      controller: _controller,
+      overlayBuilder: (context, controller) {
+        return Stack(
+          children: [
+            // Semi-transparent bottom bar
+            Positioned(
+              left: 0, right: 0, bottom: 0,
+              child: Container(
+                color: Colors.black54,
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    StreamBuilder<PlayerActivityState>(
+                      stream: controller.playerStateStream,
+                      initialData: controller.activityState,
+                      builder: (_, snap) {
+                        final playing = snap.data == PlayerActivityState.playing;
+                        return IconButton(
+                          icon: Icon(playing ? Icons.pause : Icons.play_arrow,
+                              color: Colors.white),
+                          onPressed: () =>
+                              playing ? controller.pause() : controller.play(),
+                        );
+                      },
+                    ),
+                    Expanded(
+                      child: StreamBuilder<Duration>(
+                        stream: controller.positionStream,
+                        initialData: controller.currentPosition,
+                        builder: (_, snap) {
+                          final position = snap.data ?? Duration.zero;
+                          final duration = controller.duration;
+                          final progress = duration.inMilliseconds > 0
+                              ? position.inMilliseconds / duration.inMilliseconds
+                              : 0.0;
+                          return Slider(
+                            value: progress.clamp(0.0, 1.0),
+                            onChanged: (v) => controller
+                                .seekTo(duration * v),
+                          );
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.fullscreen, color: Colors.white),
+                      onPressed: controller.toggleFullScreen,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    )
+    ```
+  </Tab>
+  <Tab title="With subtitles">
+    Attach sidecar subtitles at load time and style them with `subtitleStyle`.
+
+    ```dart
+    NativeVideoPlayer(
+      controller: _controller,
+      subtitleStyle: const NativeVideoPlayerSubtitleStyle(
+        fontSize: 18,
+        textColor: Color(0xFFFFFFFF),
+        backgroundColor: Color(0xCC000000),
+        alignment: Alignment.bottomCenter,
+        padding: EdgeInsets.only(bottom: 32, left: 24, right: 24),
+        fullscreenLandscapeFontSize: 22,
+      ),
+    )
+
+    // In initState / after load:
+    await _controller.load(
+      url: 'https://cdn.example.com/video.m3u8',
+      sidecarSubtitles: [
+        NativeVideoPlayerSidecarSubtitle.url(
+          'https://cdn.example.com/subs_en.vtt',
+          language: 'en',
+          label: 'English',
+        ),
+        NativeVideoPlayerSidecarSubtitle.url(
+          'https://cdn.example.com/subs_nl.vtt',
+          language: 'nl',
+          label: 'Nederlands',
+        ),
+      ],
+    );
+    ```
+  </Tab>
+  <Tab title="Locked overlay">
+    Keep the overlay permanently visible for live streams or interactive content.
+
+    ```dart
+    NativeVideoPlayer(
+      controller: _controller,
+      overlayBuilder: (context, controller) => MyLiveControls(controller),
+    )
+
+    // In your widget's initState:
+    _controller.lockOverlay();
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## NativeVideoPlayerSubtitleStyle
+
+`NativeVideoPlayerSubtitleStyle` controls the appearance and position of the Flutter-rendered sidecar subtitle overlay. All fields except `embeddedTextScale` apply exclusively to sidecar (VTT/SRT) tracks; embedded tracks use the system caption settings.
+
+<Note>
+  To change the style at runtime, rebuild `NativeVideoPlayer` with a new `subtitleStyle` instance. The overlay re-renders immediately. The `embeddedTextScale` change is also pushed to the native platform caption renderer.
+</Note>
+
+### Text appearance
+
+<ParamField path="fontSize" type="double" default="16">
+  Font size in logical pixels for sidecar subtitle cue lines.
+</ParamField>
+
+<ParamField path="fontWeight" type="FontWeight" default="FontWeight.w500">
+  Font weight for subtitle text.
+</ParamField>
+
+<ParamField path="fontStyle" type="FontStyle" default="FontStyle.normal">
+  Font style (`normal` or `italic`).
+</ParamField>
+
+<ParamField path="fontFamily" type="String?">
+  Custom font family. `null` uses the app's default font.
+</ParamField>
+
+<ParamField path="lineHeight" type="double?">
+  Line height multiplier (maps to `TextStyle.height`). `null` uses the font's default leading.
+</ParamField>
+
+<ParamField path="textColor" type="Color" default="Color(0xFFFFFFFF)">
+  Foreground colour of the subtitle text.
+</ParamField>
+
+<ParamField path="backgroundColor" type="Color" default="Color(0xB3000000)">
+  Background colour behind each cue line (translucent black by default).
+</ParamField>
+
+<ParamField path="outlineColor" type="Color?">
+  Optional text-outline colour for readability on busy video backgrounds. `null` disables the outline.
+</ParamField>
+
+<ParamField path="outlineWidth" type="double" default="0">
+  Width of the text outline in logical pixels. Has no effect when `outlineColor` is `null`.
+</ParamField>
+
+<ParamField path="textAlign" type="TextAlign" default="TextAlign.center">
+  Text alignment within multi-line cue blocks.
+</ParamField>
+
+### Position
+
+<ParamField path="alignment" type="Alignment" default="Alignment.bottomCenter">
+  Where the cue block is pinned on the video surface. Any `Alignment` is accepted — for example `Alignment.topCenter` for top captions, `Alignment.center`, or `Alignment.bottomRight`.
+</ParamField>
+
+<ParamField path="padding" type="EdgeInsets" default="EdgeInsets.only(bottom: 24, left: 16, right: 16)">
+  Space between the cue block and the video edges.
+</ParamField>
+
+### Fullscreen-landscape overrides
+
+When the player is fullscreen **and** in landscape orientation, these values override the base typography so captions can be larger on a big-screen experience. They have no effect inline or in fullscreen-portrait — the base values are always used there.
+
+<ParamField path="fullscreenLandscapeFontSize" type="double?">
+  Font size override for fullscreen landscape. Falls back to `fontSize` when `null`.
+</ParamField>
+
+<ParamField path="fullscreenLandscapeFontWeight" type="FontWeight?">
+  Font weight override for fullscreen landscape. Falls back to `fontWeight` when `null`.
+</ParamField>
+
+<ParamField path="fullscreenLandscapeLineHeight" type="double?">
+  Line height override for fullscreen landscape. Falls back to `lineHeight` when `null`.
+</ParamField>
+
+### Embedded track scaling
+
+<ParamField path="embeddedTextScale" type="double" default="1.0">
+  Text-size scale for **embedded** subtitle tracks rendered natively by the platform (ExoPlayer's `SubtitleView` on Android, AVPlayer captions on iOS). `1.0` respects the user's system caption size preference. This field has no effect on sidecar overlay captions — use `fontSize` for those. Equivalent to calling `controller.setNativeSubtitleTextScale(scale)`.
+</ParamField>
+
+---
+
+## Behaviour notes
+
+<AccordionGroup>
+  <Accordion title="Platform view caching">
+    The platform view (`UiKitView` on iOS, `PlatformViewLink` + `AndroidViewSurface` on Android) is constructed once and cached on the first `build` call. Subsequent `setState` rebuilds (for overlay visibility, subtitle style updates, etc.) do not recreate the native view, which prevents video interruption.
+  </Accordion>
+  <Accordion title="Texture mode">
+    When `NativeVideoPlayerConfig.androidTextureMode` or `NativeVideoPlayerConfig.iosTextureMode` is enabled and the controller has no native controls, the widget uses an engine texture (`Texture` widget) instead of a platform view. This eliminates the per-tile hybrid-composition overhead in scroll feeds. The letterboxing (aspect-ratio matching) is handled in Flutter using `NativeVideoPlayerVideoSize` events from the native side.
+  </Accordion>
+  <Accordion title="Overlay auto-hide">
+    When `overlayBuilder` is provided, the overlay is visible by default. A 3-second timer starts automatically after it becomes visible and hides it. Any `PlayerControlEvent` (except `timeUpdated`) restarts the timer. Tapping the video toggles visibility. The timer is suppressed when `controller.isOverlayLocked` is `true`.
+  </Accordion>
+  <Accordion title="Subtitle layer z-order">
+    The sidecar subtitle overlay renders above the video surface but **below** the custom controls overlay. This ensures control tap targets are never blocked by caption text.
+  </Accordion>
+</AccordionGroup>

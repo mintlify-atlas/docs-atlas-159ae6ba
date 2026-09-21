@@ -1,0 +1,93 @@
+---
+title: "better_native_video_player: Native Video for Flutter"
+sidebarTitle: "Introduction"
+description: "better_native_video_player is a Flutter plugin for native video playback using AVPlayer on iOS and ExoPlayer on Android, with HLS, DRM, PiP, and casting."
+---
+
+`better_native_video_player` is a Flutter plugin that delivers true native video playback on both iOS and Android. Instead of rendering video through a Flutter texture or web-based fallback, it embeds platform-native player components directly in your widget tree — AVPlayerViewController on iOS and ExoPlayer (Media3) on Android — giving you the performance, codec support, and system integration that users expect on each platform.
+
+## Features
+
+<CardGroup cols={2}>
+  <Card title="HLS Streaming" icon="signal-stream">
+    Adaptive bitrate HLS (`.m3u8`) with real-time quality selection and automatic viewport-based quality capping for feed views.
+  </Card>
+  <Card title="DRM Support" icon="shield-halved">
+    FairPlay Streaming on iOS and Widevine on Android, plus AES-128 and ClearKey on both platforms for protected content.
+  </Card>
+  <Card title="Picture-in-Picture" icon="rectangle-history">
+    Native PiP on iOS 14+ (automatic on backgrounding) and Android 8+ (via the `floating` package when in fullscreen).
+  </Card>
+  <Card title="AirPlay" icon="airplay">
+    iOS AirPlay device discovery, route picker, and connection tracking via a global `AirPlayStateManager`.
+  </Card>
+  <Card title="Chromecast" icon="cast">
+    Pure-Dart Chromecast session with mDNS device discovery, full transport control, captions, and a live status stream — no Cast SDK required.
+  </Card>
+  <Card title="Subtitles" icon="closed-captioning">
+    HLS embedded tracks plus external sidecar VTT/SRT files rendered in a fully styleable Flutter overlay, with audio track selection.
+  </Card>
+  <Card title="Offline Downloads" icon="arrow-down-to-bracket">
+    `VideoDownloadController` with progress streams, persistent index, cancel/remove, and local file playback.
+  </Card>
+  <Card title="Background Playback" icon="music">
+    Media session integration for lock-screen controls and Now Playing info on both platforms, with a `BackgroundPlaybackGuard` helper.
+  </Card>
+  <Card title="Performance Tuning" icon="gauge">
+    Global `NativeVideoPlayerConfig` for concurrent-playback caps, viewport-based quality capping, lightweight inline views, and Android disk cache.
+  </Card>
+</CardGroup>
+
+## Platform Support
+
+The plugin targets modern OS versions to take advantage of native PiP APIs and Media3.
+
+| Platform | Minimum Version      | Native Player         |
+|----------|---------------------|-----------------------|
+| iOS      | 12.0+               | AVFoundation / AVPlayerViewController |
+| Android  | API 24+ (Android 7.0) | ExoPlayer (Media3)   |
+
+<Note>
+  Picture-in-Picture requires iOS 14.0+ on iOS and Android 8.0+ (API 26+) on Android. Automatic PiP on iOS requires iOS 14.2+.
+</Note>
+
+## Current Version
+
+| Package                        | Version | Dart SDK     | Flutter SDK |
+|-------------------------------|---------|--------------|-------------|
+| `better_native_video_player`   | 1.5.2   | ≥ 3.9.0 < 4.0.0 | ≥ 3.3.0 |
+
+## Architecture
+
+The plugin bridges Flutter and the platform player through a pair of channels per player view:
+
+- **MethodChannel** — Flutter → Native commands (play, pause, seek, setQuality, etc.)
+- **EventChannel** — Native → Flutter state updates (position ticks, buffering, PiP, AirPlay)
+
+### iOS
+
+On iOS the plugin registers a `FlutterPlatformView` backed by a full `AVPlayerViewController`. This means you get the native playback pipeline including:
+
+- `AVFoundation` for decoding and HLS manifest handling
+- `AVPictureInPictureController` for PiP
+- `MPNowPlayingInfoCenter` for Control Center / lock-screen integration
+- Hardware-accelerated DRM via FairPlay Streaming
+
+### Android
+
+On Android each player view hosts an ExoPlayer (Media3) instance surfaced through a `PlatformView` with an Android `View`. Key integrations include:
+
+- Media3 HLS extension for adaptive bitrate streaming
+- `MediaSessionService` for lock-screen notifications
+- `floating` package (v6) for Picture-in-Picture management
+- Widevine CDM for DRM-protected streams
+- Optional LRU disk cache via Media3's `CacheDataSource`
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the package and play your first video in under 5 minutes.
+  </Card>
+  <Card title="Platform Setup" icon="wrench" href="/platform-setup">
+    Configure Info.plist and AndroidManifest.xml for video, PiP, and Chromecast.
+  </Card>
+</CardGroup>

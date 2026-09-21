@@ -1,0 +1,293 @@
+---
+title: "Chromecast: Pure-Dart Device Discovery and Cast Session"
+sidebarTitle: "Chromecast"
+description: "Discover Chromecast devices and control playback with better_native_video_player's pure-Dart cast implementation. No Cast SDK required — uses mDNS and the Chromecast protocol."
+---
+
+`better_native_video_player` ships a complete Chromecast implementation without the Cast SDK: device discovery uses system Bonjour on iOS and pure-Dart mDNS elsewhere, and the cast session speaks the CASTV2 protocol over TLS directly — no native dependencies, no hidden WebViews, and no Google Services requirement. The entire cast API lives in a dedicated entrypoint to avoid naming collisions with other cast-related packages.
+
+## Import
+
+The cast API is exported from a **separate entrypoint** — `cast.dart` — so its `CastDevice` and `CastSession` types cannot collide with identically-named classes from other libraries. Always import it with a prefix:
+
+```dart
+import 'package:better_native_video_player/cast.dart' as cast;
+```
+
+## iOS Setup
+
+On iOS the scan uses the system Bonjour browser (`NWBrowser`), which requires two entries in `Info.plist`. The first scan triggers the Local Network permission prompt.
+
+```xml
+<key>NSLocalNetworkUsageDescription</key>
+<string>Used to find Cast devices on your network.</string>
+<key>NSBonjourServices</key>
+<array>
+    <string>_googlecast._tcp</string>
+</array>
+```
+
+<Note>
+If the user denies the Local Network permission, `CastDeviceDiscovery.discover()` throws a `CastDiscoveryException` with an actionable message. It never crashes the app. Users can re-enable the permission in **Settings → Privacy & Security → Local Network**.
+</Note>
+
+## Device Discovery
+
+`CastDeviceDiscovery.discover()` performs a one-shot mDNS scan and resolves after a configurable timeout with every device it found. Call it when your picker UI opens:
+
+```dart
+try {
+  final devices = await cast.CastDeviceDiscovery.discover(
+    timeout: const Duration(seconds: 5),
+  );
+  for (final device in devices) {
+    print('${device.displayName} (${device.model}) at ${device.host}:${device.port}');
+  }
+} on cast.CastDiscoveryException catch (e) {
+  print('Discovery failed: ${e.message}');
+}
+```
+
+### `CastDevice` Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` | mDNS service instance identifier (unique on the network). |
+| `name` | `String` | Raw service instance name. |
+| `friendlyName` | `String?` | Human-readable name from the TXT record (e.g. `"Living room TV"`). |
+| `model` | `String?` | Device model string (e.g. `"Chromecast Ultra"`). |
+| `host` | `String` | IP address or hostname to connect to. |
+| `port` | `int` | CASTV2 TLS port (usually `8009`). |
+| `displayName` | `String` | `friendlyName ?? name` — use this for picker labels. |
+
+## Cast Session
+
+Pass a discovered `CastDevice` to `CastSession.connect()` to launch the Default Media Receiver and open a transport connection:
+
+```dart
+final session = await cast.CastSession.connect(devices.first);
+```
+
+### Loading Media
+
+```dart
+await session.loadMedia(
+  contentUrl: 'https://example.com/video.mp4',
+  contentType: 'video/mp4',
+  title: 'Big Buck Bunny',
+  subtitle: 'Blender Foundation',
+  imageUrl: 'https://example.com/poster.jpg',
+  textTracks: [
+    cast.CastTextTrack(
+      trackId: 1,
+      url: 'https://example.com/subs_en.vtt',
+      language: 'en',
+      name: 'English',
+    ),
+    cast.CastTextTrack(
+      trackId: 2,
+      url: 'https://example.com/subs_fr.vtt',
+      language: 'fr',
+      name: 'Français',
+    ),
+  ],
+  activeTrackIds: [1], // start with English captions on
+  startAt: const Duration(seconds: 30),
+);
+```
+
+<Note>
+The receiver downloads `contentUrl`, `imageUrl`, and caption `url` values itself — they must be reachable from the Chromecast over HTTPS with appropriate CORS headers. `file://` paths and app-local URLs will not work.
+</Note>
+
+For **LIVE streams**, omit `startAt` (or leave it at `Duration.zero`) so the receiver starts at the live edge. Passing an explicit position to a live stream forces playback to start from the beginning of the DVR window instead.
+
+### Transport Control
+
+```dart
+await session.play();
+await session.pause();
+await session.seek(const Duration(minutes: 2, seconds: 30));
+
+// Receiver volume (0.0–1.0), independent of device system volume
+await session.setVolume(0.5);
+await session.setMuted(true);
+
+// Switch caption tracks; pass [] to disable all captions
+await session.setActiveTracks([1]);
+
+// Client-side loop — replays media when the receiver reports FINISHED
+session.setLooping(true);
+
+await session.close();
+```
+
+### Status Stream
+
+`statusStream` emits a `CastSessionStatus` whenever the receiver's state changes — including changes made from the TV remote, the Google Home app, or voice commands:
+
+```dart
+session.statusStream.listen((status) {
+  print(
+    '${status.playerState} '
+    '${status.position.inSeconds}s / ${status.duration?.inSeconds}s '
+    'vol ${(status.volumeLevel * 100).round()}% '
+    'tracks ${status.activeTrackIds}',
+  );
+});
+```
+
+### `CastSessionStatus` Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `playerState` | `String` | `IDLE`, `BUFFERING`, `PLAYING`, or `PAUSED`. |
+| `position` | `Duration` | Current playback position. |
+| `duration` | `Duration?` | Total media duration (`null` for live streams). |
+| `volumeLevel` | `double` | Receiver volume, 0.0–1.0. |
+| `muted` | `bool` | Whether the receiver is muted. |
+| `activeTrackIds` | `List<int>` | Currently active text track IDs. |
+| `idleReason` | `String?` | `FINISHED`, `CANCELLED`, or `ERROR` when `playerState == 'IDLE'`. |
+| `isPlaying` | `bool` | Convenience getter: `playerState == 'PLAYING'`. |
+
+## Full Flow Example
+
+```dart
+import 'package:better_native_video_player/cast.dart' as cast;
+import 'package:flutter/material.dart';
+
+class CastScreen extends StatefulWidget {
+  const CastScreen({super.key});
+
+  @override
+  State<CastScreen> createState() => _CastScreenState();
+}
+
+class _CastScreenState extends State<CastScreen> {
+  List<cast.CastDevice> _devices = [];
+  cast.CastSession? _session;
+  cast.CastSessionStatus _status = const cast.CastSessionStatus();
+  bool _discovering = false;
+
+  Future<void> _discover() async {
+    setState(() => _discovering = true);
+    try {
+      final devices = await cast.CastDeviceDiscovery.discover();
+      setState(() => _devices = devices);
+    } on cast.CastDiscoveryException catch (e) {
+      debugPrint('Discovery failed: ${e.message}');
+    } finally {
+      setState(() => _discovering = false);
+    }
+  }
+
+  Future<void> _connect(cast.CastDevice device) async {
+    final session = await cast.CastSession.connect(device);
+    session.statusStream.listen((s) {
+      if (mounted) setState(() => _status = s);
+    });
+    setState(() => _session = session);
+
+    await session.loadMedia(
+      contentUrl: 'https://example.com/video.mp4',
+      contentType: 'video/mp4',
+      title: 'Sample Video',
+      imageUrl: 'https://example.com/poster.jpg',
+      textTracks: [
+        const cast.CastTextTrack(
+          trackId: 1,
+          url: 'https://example.com/subs_en.vtt',
+          language: 'en',
+          name: 'English',
+        ),
+      ],
+      activeTrackIds: [1],
+    );
+  }
+
+  Future<void> _disconnect() async {
+    await _session?.close();
+    setState(() {
+      _session = null;
+      _status = const cast.CastSessionStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _session?.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = _session;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Chromecast')),
+      body: Column(
+        children: [
+          if (session == null) ...[
+            ElevatedButton(
+              onPressed: _discovering ? null : _discover,
+              child: Text(_discovering ? 'Scanning…' : 'Scan for devices'),
+            ),
+            ..._devices.map(
+              (d) => ListTile(
+                leading: const Icon(Icons.cast),
+                title: Text(d.displayName),
+                subtitle: Text(d.model ?? d.host),
+                onTap: () => _connect(d),
+              ),
+            ),
+          ] else ...[
+            ListTile(
+              title: Text('Connected to ${session.device.displayName}'),
+              subtitle: Text(
+                '${_status.playerState} '
+                '${_status.position.inSeconds}s',
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.cast_connected),
+                onPressed: _disconnect,
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    _status.isPlaying ? Icons.pause : Icons.play_arrow,
+                  ),
+                  onPressed: () =>
+                      _status.isPlaying ? session.pause() : session.play(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.stop),
+                  onPressed: () => session.stop(),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+```
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="No Cast SDK" icon="shield-check">
+    The entire implementation is pure Dart (CASTV2 over TLS). No native dependencies, no Google Play Services requirement, and WASM-compatible.
+  </Card>
+  <Card title="Separate entrypoint" icon="package">
+    Import as `import 'package:better_native_video_player/cast.dart' as cast;` to avoid naming conflicts with `CastDevice` and `CastSession` from other packages.
+  </Card>
+  <Card title="Live stream support" icon="radio">
+    Omit `startAt` on `loadMedia()` for live streams — the receiver starts at the live edge. Passing `Duration.zero` explicitly would seek to the DVR window start.
+  </Card>
+  <Card title="Receiver-side captions" icon="closed-captioning">
+    Pass `CastTextTrack` entries in `textTracks` and enable them with `activeTrackIds`. Caption URLs must be publicly reachable HTTPS with CORS headers for the receiver to fetch them.
+  </Card>
+</CardGroup>

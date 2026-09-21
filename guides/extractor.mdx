@@ -1,0 +1,242 @@
+---
+title: "better_native_video_extractor: Vimeo and YouTube URLs"
+sidebarTitle: "Extractor"
+description: "Extract playable HLS streams from Vimeo and YouTube with better_native_video_extractor. Supports domain-locked videos, private hashes, token expiry, and concurrent extraction coalescing."
+---
+
+`better_native_video_extractor` is a companion package that resolves Vimeo and YouTube video pages into playable HLS or MP4 stream URLs — plus thumbnails, duration, title, and storyboard sprite sheets — over plain HTTP with no hidden WebView involved. It ships as a separate pub.dev package so you only pull it in when you need it, and its `VideoSourceExtractor` interface means it plugs into any Flutter player, not just `better_native_video_player`.
+
+## Installation
+
+Add `better_native_video_extractor` as its own entry in your `pubspec.yaml`. It is a separate package from the main player:
+
+```yaml
+dependencies:
+  better_native_video_player: ^1.5.2
+  better_native_video_extractor: ^0.1.0
+```
+
+Then import it wherever you resolve video URLs:
+
+```dart
+import 'package:better_native_video_extractor/better_native_video_extractor.dart';
+```
+
+---
+
+## VimeoExtractor
+
+`VimeoExtractor` fetches the player config for a Vimeo video as plain JSON from `player.vimeo.com/video/{id}/config` and falls back to extracting the inline `window.playerConfig` from the player page HTML if the JSON endpoint returns an error. No JavaScript execution or WebView is involved at any step.
+
+<ParamField path="referer" type="String?" required={false}>
+  The `Referer` header to send with every request. Required for domain-locked videos — pass the domain that the embed is authorised to play from (e.g. `'https://yourdomain.com'`).
+</ParamField>
+
+<ParamField path="headers" type="Map<String, String>" required={false}>
+  Additional HTTP headers, such as tenant authentication tokens. Defaults to an empty map.
+</ParamField>
+
+### extract(videoUrlOrId)
+
+```dart
+Future<ExtractedVideo> extract(String videoUrlOrId)
+```
+
+Accepts a full Vimeo URL (`https://vimeo.com/76979871`), a player URL (`https://player.vimeo.com/video/76979871`), or a bare numeric ID. Returns an `ExtractedVideo` on success and throws `VideoExtractionException` on failure.
+
+### ExtractedVideo fields
+
+| Field | Type | Description |
+|---|---|---|
+| `playbackUrl` | `String?` | Best stream URL for playback: H.264 HLS first, then default HLS, then progressive MP4. |
+| `hlsUrl` | `String?` | Default HLS (m3u8) URL. May contain non-AVC variants that AVPlayer rejects with "Cannot Decode" — prefer `playbackUrl`. |
+| `hlsAvcUrl` | `String?` | H.264-only HLS variant (`avc_url` from the Vimeo config). Safe for maximum device compatibility. |
+| `progressiveUrl` | `String?` | Progressive MP4, when the platform serves one (older/smaller videos). |
+| `bestThumbnail` | `ExtractedThumbnail?` | Largest available thumbnail (`url`, `width`, `height`). |
+| `thumbnails` | `List<ExtractedThumbnail>` | All thumbnail variants, sorted largest first. |
+| `title` | `String?` | Video title from the player config. |
+| `duration` | `Duration?` | Video duration. |
+| `expiresAt` | `DateTime?` | Parsed from the `exp=` token in the stream URL (typically ~15 minutes). Null when the URL is not tokenized. |
+| `storyboard` | `ExtractedStoryboard?` | Scrub-preview sprite sheet (`url`, `frameWidth`, `frameHeight`, `columns`, `frames`), when provided by Vimeo's `thumb_preview` config. Feed to `StoryboardThumbnails.fromUniformGrid` to display scrub previews. |
+
+### isFresh()
+
+```dart
+bool isFresh({Duration margin = const Duration(minutes: 1)})
+```
+
+Returns `true` when `expiresAt` is still in the future by at least `margin`. Use this before reusing a cached `ExtractedVideo` directly; `VideoExtractionCache` handles this automatically.
+
+### Private links
+
+Pass the full URL including the private hash as either a path segment or a query parameter — both forms are parsed:
+
+```dart
+// Path-segment hash (vimeo.com/{id}/{hash})
+final video = await extractor.extract('https://vimeo.com/123456789/abcdef1234');
+
+// Query-parameter hash (?h=)
+final video = await extractor.extract('https://vimeo.com/123456789?h=abcdef1234');
+```
+
+### Domain-locked videos
+
+Pass the allowed origin as `referer`. Vimeo's config endpoint checks that the `Referer` header matches the domains whitelisted in the video's privacy settings — the same check the embed iframe would pass:
+
+```dart
+final extractor = VimeoExtractor(referer: 'https://yourdomain.com');
+final video = await extractor.extract('https://vimeo.com/76979871');
+```
+
+---
+
+## VideoExtractionCache
+
+`VideoExtractionCache` wraps any `VideoSourceExtractor` with expiry-aware caching: it returns a cached result while the tokenized URL is still fresh, rejects stale entries, and coalesces concurrent calls for the same URL into a single in-flight network request. A feed that builds five cards for the same Vimeo video performs exactly one HTTP call.
+
+```dart
+final extractor = VimeoExtractor(referer: 'https://yourdomain.com');
+final cache = VideoExtractionCache(extractor);
+```
+
+<ParamField path="safetyMargin" type="Duration" required={false}>
+  Subtracted from the token expiry before a cached result is considered stale. Defaults to 2 minutes, ensuring the playing URL is refreshed before the CDN rejects it.
+</ParamField>
+
+### extract(url)
+
+```dart
+Future<ExtractedVideo> extract(String videoUrlOrId)
+```
+
+Returns the cached `ExtractedVideo` if it is still fresh (accounting for `safetyMargin`), or performs a new extraction and caches the result. Concurrent calls for the same URL join the single in-flight `Future` — no duplicate requests.
+
+### timeToRefresh(url)
+
+```dart
+Duration? timeToRefresh(String videoUrlOrId)
+```
+
+Returns how long until the cached URL for `videoUrlOrId` expires (minus `safetyMargin`), or `null` when the URL has no expiry token or is not cached. Use this to schedule a proactive refresh for the currently-playing video before the CDN starts rejecting its stream URL mid-playback:
+
+```dart
+final ttl = cache.timeToRefresh(currentUrl);
+if (ttl != null) {
+  Future.delayed(ttl, () async {
+    final fresh = await cache.extract(currentUrl);
+    await controller.load(url: fresh.playbackUrl!);
+  });
+}
+```
+
+### failures stream
+
+```dart
+Stream<VideoExtractionFailure> get failures
+```
+
+Every failed extraction throws at the call site **and** is also broadcast on this stream. Listen to it once at the app level to funnel all extraction errors into your crash reporter or analytics pipeline without scattering `try/catch` across every call site.
+
+`VideoExtractionFailure` carries:
+- `videoUrlOrId` — the input that was passed to `extract()`
+- `error` — the `VideoExtractionException` (with `provider` and `message`)
+- `stackTrace` — the full Dart stack trace
+
+<Tip>
+  Register a single `cache.failures` listener at app startup — in your `main()` or a top-level provider — so no extraction failure ever goes unreported, regardless of which screen triggered it.
+</Tip>
+
+---
+
+## YouTubeExtractor
+
+`YouTubeExtractor` resolves YouTube videos via [youtube_explode_dart](https://pub.dev/packages/youtube_explode_dart). It returns the same `ExtractedVideo` shape — `title`, `duration`, `thumbnails`, and `progressiveUrl` for the highest-bitrate muxed stream.
+
+<Warning>
+  YouTube's Terms of Service restrict playback outside of the official YouTube player. Whether to use extracted YouTube streams in your app is a **product and legal decision** for your team. The extractor is provided because many apps legitimately need at least metadata (title, thumbnail, duration) without committing to stream playback.
+</Warning>
+
+```dart
+final extractor = YouTubeExtractor();
+final video = await extractor.extract('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+print(video.title);          // "Rick Astley - Never Gonna Give You Up"
+print(video.bestThumbnail);  // maxRes thumbnail
+```
+
+---
+
+## Full example: extract → cache → play
+
+The recommended pattern is to create one `VideoExtractionCache` for the lifetime of the app (or the feature), register the failure listener once, and call `extract()` wherever you need a stream URL:
+
+```dart
+import 'package:better_native_video_extractor/better_native_video_extractor.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+// — App-level singleton -------------------------------------------------------
+
+final _extractor = VimeoExtractor(referer: 'https://yourdomain.com');
+final videoCache = VideoExtractionCache(_extractor);
+
+void initVideoCache() {
+  // Listen once; report every failure to your crash reporter.
+  videoCache.failures.listen((f) {
+    // f.videoUrlOrId  — which video failed
+    // f.error         — VideoExtractionException with provider + message
+    // f.stackTrace    — full Dart stack trace
+    MyCrashReporter.notify(f.error, f.stackTrace, context: {
+      'video': f.videoUrlOrId,
+    });
+  });
+}
+
+// — Per-screen usage ----------------------------------------------------------
+
+class VimeoPlayerScreen extends StatefulWidget {
+  const VimeoPlayerScreen({required this.vimeoUrl, super.key});
+  final String vimeoUrl;
+
+  @override
+  State<VimeoPlayerScreen> createState() => _VimeoPlayerScreenState();
+}
+
+class _VimeoPlayerScreenState extends State<VimeoPlayerScreen> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _loadVideo();
+  }
+
+  Future<void> _loadVideo() async {
+    // Cache coalesces concurrent calls — safe to call from multiple widgets.
+    final video = await videoCache.extract(widget.vimeoUrl);
+
+    await _controller.initialize();
+    await _controller.load(url: video.playbackUrl!);
+
+    // Schedule a proactive token refresh before the URL expires.
+    final ttl = videoCache.timeToRefresh(widget.vimeoUrl);
+    if (ttl != null && mounted) {
+      Future.delayed(ttl, _loadVideo);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return NativeVideoPlayer(controller: _controller);
+  }
+}
+```
+
+<Tip>
+  Call `initVideoCache()` once in `main()` or your app's initialization so the failure listener is in place before the first `extract()` call — even from background or pre-fetch scenarios.
+</Tip>

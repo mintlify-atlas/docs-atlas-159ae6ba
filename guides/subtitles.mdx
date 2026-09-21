@@ -1,0 +1,336 @@
+---
+title: "Subtitles: Embedded HLS Tracks and Sidecar Files"
+sidebarTitle: "Subtitles"
+description: "Display embedded HLS subtitle tracks or external VTT/SRT sidecar files in better_native_video_player. Style, position, and switch tracks at runtime."
+---
+
+`better_native_video_player` supports two complementary subtitle systems: **embedded tracks** that live inside the HLS manifest and are rendered by the native platform player, and **sidecar subtitles** — external VTT or SRT files rendered by the plugin's own Flutter overlay. Both types appear in the same track list returned by `getAvailableSubtitleTracks()`, distinguished by the `source` field, and both respond to the same `setSubtitleTrack()` call.
+
+## Embedded Subtitles
+
+Embedded subtitle tracks are declared in the HLS master manifest as `EXT-X-MEDIA` renditions. The native player (AVFoundation on iOS, ExoPlayer on Android) detects and renders them automatically.
+
+### Listing Tracks
+
+```dart
+final List<NativeVideoPlayerSubtitleTrack> tracks =
+    await controller.getAvailableSubtitleTracks();
+
+for (final track in tracks) {
+  print(
+    '${track.displayName} (${track.language}) '
+    '— selected: ${track.isSelected}, source: ${track.source.name}',
+  );
+}
+```
+
+### `NativeVideoPlayerSubtitleTrack` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `int` | Platform-specific track index (`-1` for Off) |
+| `language` | `String` | BCP-47 language code, e.g. `"en"`, `"nl"`, `"en-US"` |
+| `displayName` | `String` | Human-readable name, e.g. `"English"`, `"Español"` |
+| `isSelected` | `bool` | Whether this track is currently active |
+| `source` | `SubtitleTrackSource` | `.embedded` or `.sidecar` |
+
+### Selecting a Track
+
+```dart
+// Enable a specific track
+final english = tracks.firstWhere((t) => t.language == 'en');
+await controller.setSubtitleTrack(english);
+
+// Disable subtitles entirely
+await controller.setSubtitleTrack(NativeVideoPlayerSubtitleTrack.off());
+```
+
+### Scaling Embedded Caption Text
+
+Embedded tracks are rendered by the platform's native caption renderer, so the `fontSize` field in `NativeVideoPlayerSubtitleStyle` has no effect on them. Use `setNativeSubtitleTextScale` instead:
+
+```dart
+// 1.0 = platform default (respects the user's system caption size)
+await controller.setNativeSubtitleTextScale(1.5); // 150 % — larger captions
+await controller.setNativeSubtitleTextScale(0.8); // 80 %  — smaller captions
+await controller.setNativeSubtitleTextScale(1.0); // back to platform default
+```
+
+The scale survives quality switches and item reloads, and is re-applied automatically when the native view is recreated (e.g. on navigation back in a list → detail flow).
+
+You can also set the scale through the style object when you want to combine it with sidecar styling:
+
+```dart
+controller.setSubtitleStyle(
+  const NativeVideoPlayerSubtitleStyle(embeddedTextScale: 1.5),
+);
+```
+
+---
+
+## Sidecar Subtitles
+
+Sidecar subtitles are external VTT or SRT files that the plugin loads, parses, and renders in a Flutter overlay above the video surface. They work for both HLS and MP4 on both platforms and are fully styleable.
+
+### Creating Sidecar Sources
+
+`NativeVideoPlayerSidecarSubtitle` has three named constructors:
+
+```dart
+// From a remote URL
+const NativeVideoPlayerSidecarSubtitle.url(
+  'https://cdn.example.com/subs_en.vtt',
+  language: 'en',
+  label: 'English',
+);
+
+// From a local file path
+const NativeVideoPlayerSidecarSubtitle.file(
+  '/data/user/0/com.example.app/files/subs_nl.srt',
+  language: 'nl',
+  label: 'Nederlands',
+);
+
+// From raw subtitle text already in memory
+const NativeVideoPlayerSidecarSubtitle.content(
+  vttString, // String — raw VTT or SRT content
+  language: 'fr',
+  label: 'Français',
+  format: SubtitleFormat.vtt, // optional; auto-detected when null
+);
+```
+
+`NativeVideoPlayerSidecarSubtitle` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | `String?` | Remote URL of the subtitle file |
+| `filePath` | `String?` | Absolute local file path |
+| `content` | `String?` | Raw subtitle text |
+| `language` | `String` | BCP-47 language code |
+| `label` | `String` | Display name shown in track pickers |
+| `format` | `SubtitleFormat?` | `vtt` or `srt`; auto-detected when `null` |
+
+### Loading at Startup
+
+Pass sidecar subtitles directly in the `load()` call:
+
+```dart
+await controller.load(
+  url: 'https://cdn.example.com/movie.mp4',
+  sidecarSubtitles: const [
+    NativeVideoPlayerSidecarSubtitle.url(
+      'https://cdn.example.com/subs_en.vtt',
+      language: 'en',
+      label: 'English',
+    ),
+    NativeVideoPlayerSidecarSubtitle.url(
+      'https://cdn.example.com/subs_nl.vtt',
+      language: 'nl',
+      label: 'Nederlands',
+    ),
+    NativeVideoPlayerSidecarSubtitle.file(
+      '/storage/emulated/0/Download/subs_de.srt',
+      language: 'de',
+      label: 'Deutsch',
+    ),
+  ],
+);
+```
+
+### Attaching After Load
+
+You can also attach or replace sidecar tracks after a video is already playing:
+
+```dart
+await controller.setSidecarSubtitles([
+  NativeVideoPlayerSidecarSubtitle.url(
+    'https://cdn.example.com/forced_en.vtt',
+    language: 'en',
+    label: 'English (forced)',
+  ),
+]);
+```
+
+Calling `setSidecarSubtitles` resets track selection to Off. Use `setSubtitleTrack` afterwards to activate one.
+
+### Selecting a Sidecar Track
+
+Sidecar tracks appear in the same list as embedded tracks. Use the `source` field to distinguish them:
+
+```dart
+final tracks = await controller.getAvailableSubtitleTracks();
+
+// Find and activate a sidecar track
+final sidecar = tracks.firstWhere(
+  (t) => t.source == SubtitleTrackSource.sidecar && t.language == 'en',
+);
+await controller.setSubtitleTrack(sidecar);
+
+// Disable all subtitles
+await controller.setSubtitleTrack(NativeVideoPlayerSubtitleTrack.off());
+```
+
+### Styling Sidecar Subtitles
+
+Style is set via the `subtitleStyle` parameter on the `NativeVideoPlayer` widget. Changes take effect immediately; rebuild the widget with a new style object to update at runtime.
+
+```dart
+NativeVideoPlayer(
+  controller: controller,
+  subtitleStyle: const NativeVideoPlayerSubtitleStyle(
+    fontSize: 22,
+    fontWeight: FontWeight.w600,
+    textColor: Colors.yellow,
+    backgroundColor: Colors.black54,
+    outlineColor: Colors.black,
+    outlineWidth: 2,
+    alignment: Alignment.bottomCenter,   // any Alignment
+    padding: EdgeInsets.only(bottom: 32, left: 16, right: 16),
+    textAlign: TextAlign.center,
+    // Fullscreen-landscape overrides — null falls back to the base values above
+    fullscreenLandscapeFontSize: 28,
+    fullscreenLandscapeFontWeight: FontWeight.bold,
+    // Scale embedded native captions at the same time
+    embeddedTextScale: 1.2,
+  ),
+)
+```
+
+`NativeVideoPlayerSubtitleStyle` reference:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `fontSize` | `16` | Sidecar caption font size in logical pixels |
+| `fontWeight` | `FontWeight.w500` | Font weight |
+| `fontStyle` | `FontStyle.normal` | Normal or italic |
+| `fontFamily` | `null` | Custom font family; `null` uses app default |
+| `lineHeight` | `null` | `TextStyle.height` multiplier |
+| `textColor` | `Colors.white` | Caption text colour |
+| `backgroundColor` | `Color(0xB3000000)` | Background behind each cue line |
+| `outlineColor` | `null` | Optional text outline colour |
+| `outlineWidth` | `0` | Outline thickness in logical pixels |
+| `alignment` | `Alignment.bottomCenter` | Caption block anchor on the video |
+| `padding` | `EdgeInsets.only(bottom: 24, left/right: 16)` | Margin from video edges |
+| `textAlign` | `TextAlign.center` | Multi-line text alignment |
+| `fullscreenLandscapeFontSize` | `null` | Fullscreen landscape font override |
+| `fullscreenLandscapeFontWeight` | `null` | Fullscreen landscape weight override |
+| `fullscreenLandscapeLineHeight` | `null` | Fullscreen landscape line height override |
+| `embeddedTextScale` | `1.0` | Text scale for native-rendered embedded tracks |
+
+## Complete Example
+
+```dart
+class SubtitleScreen extends StatefulWidget {
+  const SubtitleScreen({super.key});
+  @override
+  State<SubtitleScreen> createState() => _SubtitleScreenState();
+}
+
+class _SubtitleScreenState extends State<SubtitleScreen> {
+  late final NativeVideoPlayerController _controller;
+  List<NativeVideoPlayerSubtitleTrack> _tracks = [];
+  double _embeddedScale = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _controller.initialize();
+    await _controller.load(
+      url: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/'
+          'img_bipbop_adv_example_fmp4/master.m3u8',
+      sidecarSubtitles: const [
+        NativeVideoPlayerSidecarSubtitle.url(
+          'https://cdn.example.com/subs_en.vtt',
+          language: 'en',
+          label: 'English (sidecar)',
+        ),
+      ],
+    );
+    _controller.addActivityListener((event) async {
+      if (event.state == PlayerActivityState.playing && _tracks.isEmpty) {
+        // Wait briefly for HLS manifest to report embedded tracks
+        await Future.delayed(const Duration(seconds: 1));
+        final tracks = await _controller.getAvailableSubtitleTracks();
+        if (mounted) setState(() => _tracks = tracks);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: NativeVideoPlayer(
+              controller: _controller,
+              subtitleStyle: NativeVideoPlayerSubtitleStyle(
+                fontSize: 20,
+                textColor: Colors.white,
+                backgroundColor: Colors.black54,
+                embeddedTextScale: _embeddedScale,
+              ),
+            ),
+          ),
+          // Track picker
+          Wrap(
+            children: [
+              ActionChip(
+                label: const Text('Off'),
+                onPressed: () => _controller.setSubtitleTrack(
+                  NativeVideoPlayerSubtitleTrack.off(),
+                ),
+              ),
+              for (final track in _tracks)
+                ActionChip(
+                  label: Text(
+                    '${track.displayName}'
+                    '${track.source == SubtitleTrackSource.sidecar ? ' ⬡' : ''}',
+                  ),
+                  backgroundColor: track.isSelected ? Colors.blue : null,
+                  onPressed: () => _controller.setSubtitleTrack(track),
+                ),
+            ],
+          ),
+          // Embedded scale slider
+          Slider(
+            value: _embeddedScale,
+            min: 0.5,
+            max: 2.0,
+            divisions: 6,
+            label: '${_embeddedScale.toStringAsFixed(1)}×',
+            onChanged: (v) {
+              setState(() => _embeddedScale = v);
+              _controller.setNativeSubtitleTextScale(v);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+## Platform Notes
+
+<CardGroup cols={2}>
+  <Card title="Android" icon="android">
+    URL-based sidecar subtitles are **also attached natively** as `MediaItem.SubtitleConfiguration` in ExoPlayer, so captions remain visible inside the PiP window and in native fullscreen mode (with platform-default styling in those contexts). File and raw-content sources render through the Flutter overlay only.
+  </Card>
+  <Card title="iOS" icon="apple">
+    Sidecar subtitles render in the **Flutter overlay only** — they are not visible inside AVPlayerViewController's native fullscreen, the iOS PiP window, or on an AirPlay receiver. The phone continues to render the Flutter overlay during AirPlay, so the local screen still shows captions. Use embedded HLS tracks when receiver-side or PiP captions are required.
+  </Card>
+</CardGroup>

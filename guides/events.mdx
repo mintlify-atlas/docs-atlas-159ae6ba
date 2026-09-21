@@ -1,0 +1,184 @@
+---
+title: "Player Events: Activity and Control Streams"
+sidebarTitle: "Events"
+description: "Playback events split into activity events (play/pause/buffering) and control events (quality/speed/PiP/fullscreen), plus dedicated streams per property."
+---
+
+`better_native_video_player` separates the native player's event traffic into two conceptually distinct channels: **activity events** track the player's playback pipeline state (whether the video is loading, playing, buffering, or erroring), while **control events** capture user interactions and settings changes (quality switches, seeks, PiP transitions, fullscreen toggles, time ticks). Keeping these two concerns apart lets you subscribe only to what each part of your UI actually needs, avoids writing a single giant switch statement, and makes it easy to wire analytics or logging to one channel without touching the other. In addition to the two listener APIs, the controller also exposes individual property streams for common values like position and player state.
+
+## Activity events
+
+Activity events are delivered via `addActivityListener` and carry a `PlayerActivityEvent` with a `PlayerActivityState` value and an optional `data` map. Add a listener before calling `initialize()` to receive the very first state transitions.
+
+```dart
+controller.addActivityListener(_onActivity);
+
+void _onActivity(PlayerActivityEvent event) {
+  switch (event.state) {
+    case PlayerActivityState.playing:
+      print('Playback started');
+    case PlayerActivityState.paused:
+      print('Playback paused');
+    case PlayerActivityState.buffering:
+      print('Buffering…');
+    case PlayerActivityState.completed:
+      print('Playback complete');
+    case PlayerActivityState.error:
+      final message = event.data?['message'] as String? ?? 'Unknown error';
+      print('Error: $message');
+    default:
+      break;
+  }
+}
+```
+
+### PlayerActivityState values
+
+| State | Meaning |
+|---|---|
+| `idle` | No video has been loaded. Initial state after construction. |
+| `initializing` | `initialize()` has been called; waiting for the platform view to be created. |
+| `initialized` | The platform view is ready. `load()` can now be called. |
+| `loading` | The video source is being fetched and prepared by the native player. |
+| `loaded` | The native player has the video ready; `duration` is now available. |
+| `playing` | Frames are being decoded and rendered. |
+| `paused` | Playback is intentionally suspended. |
+| `buffering` | Playback has stalled waiting for the network. Debounced by 400 ms to avoid flicker. |
+| `completed` | The video reached its end (and `enableLooping` is `false`). |
+| `stopped` | The native player was explicitly stopped. |
+| `error` | A fatal playback error occurred. `event.data['message']` contains details. |
+
+Remove the listener in `dispose()` to prevent memory leaks:
+
+```dart
+@override
+void dispose() {
+  controller.removeActivityListener(_onActivity);
+  // ...
+  super.dispose();
+}
+```
+
+## Control events
+
+Control events are delivered via `addControlListener` and carry a `PlayerControlEvent` with a `PlayerControlState` and an optional `data` map. They fire on user-driven and player-driven setting changes, as well as on every playback tick (`timeUpdated`).
+
+```dart
+controller.addControlListener(_onControl);
+
+void _onControl(PlayerControlEvent event) {
+  switch (event.state) {
+    case PlayerControlState.timeUpdated:
+      final positionMs = event.data?['position'] as int? ?? 0;
+      final durationMs = event.data?['duration'] as int? ?? 0;
+      final bufferedMs  = event.data?['bufferedPosition'] as int? ?? 0;
+      final isBuffering = event.data?['isBuffering'] as bool? ?? false;
+      print('$positionMs / $durationMs ms (buffered: $bufferedMs)');
+    case PlayerControlState.qualityChanged:
+      print('Quality: ${event.data?['quality']}');
+    case PlayerControlState.speedChanged:
+      print('Speed: ${event.data?['speed']}x');
+    case PlayerControlState.pipStarted:
+      print('Picture-in-Picture started');
+    case PlayerControlState.pipStopped:
+      print('Picture-in-Picture stopped');
+    case PlayerControlState.fullscreenEntered:
+      print('Entered fullscreen');
+    case PlayerControlState.fullscreenExited:
+      print('Exited fullscreen');
+    default:
+      break;
+  }
+}
+```
+
+### PlayerControlState values
+
+| State | Meaning |
+|---|---|
+| `none` | Default/reset state; no control event has fired yet. |
+| `qualityChanged` | The active HLS quality variant changed. `data['quality']` holds the new variant map. |
+| `speedChanged` | Playback speed changed. `data['speed']` holds the new `double` rate. |
+| `seeked` | A seek operation completed. |
+| `pipStarted` | The player entered Picture-in-Picture mode. |
+| `pipStopped` | The player exited Picture-in-Picture mode. |
+| `fullscreenEntered` | The player entered fullscreen. |
+| `fullscreenExited` | The player exited fullscreen. |
+| `timeUpdated` | A playback tick: `data` contains `position`, `duration`, `bufferedPosition` (all milliseconds) and `isBuffering`. |
+| `subtitleTrackChanged` | The active subtitle track changed. `data` reflects the selected track's fields. |
+| `audioTrackChanged` | The active audio rendition changed. |
+
+Remove the listener in `dispose()`:
+
+```dart
+@override
+void dispose() {
+  controller.removeControlListener(_onControl);
+  // ...
+  super.dispose();
+}
+```
+
+## Individual property streams
+
+For times when you only care about one property — position, fullscreen state, PiP availability — the controller exposes dedicated broadcast `Stream`s. Subscribe with `StreamBuilder` or `listen` without filtering a union event type.
+
+| Stream | Type | Emits when |
+|---|---|---|
+| `positionStream` | `Stream<Duration>` | Playback position changes (every tick). |
+| `durationStream` | `Stream<Duration>` | The video duration becomes known or changes. |
+| `bufferedPositionStream` | `Stream<Duration>` | The buffered-ahead position advances. |
+| `playerStateStream` | `Stream<PlayerActivityState>` | The activity state transitions. |
+| `speedStream` | `Stream<double>` | Playback speed changes. |
+| `isPipEnabledStream` | `Stream<bool>` | PiP enters (`true`) or exits (`false`). |
+| `isPipAvailableStream` | `Stream<bool>` | PiP availability on the device changes. |
+| `isAirplayAvailableStream` | `Stream<bool>` | AirPlay device availability changes (iOS only, global). |
+| `isFullscreenStream` | `Stream<bool>` | Fullscreen enters (`true`) or exits (`false`). |
+| `qualityChangedStream` | `Stream<NativeVideoPlayerQuality>` | The active HLS quality variant changes. |
+
+### Listening to `positionStream`
+
+```dart
+late StreamSubscription<Duration> _positionSub;
+
+@override
+void initState() {
+  super.initState();
+  _positionSub = controller.positionStream.listen((position) {
+    setState(() => _currentPosition = position);
+  });
+}
+
+@override
+void dispose() {
+  _positionSub.cancel();
+  super.dispose();
+}
+```
+
+### Using `StreamBuilder` with `playerStateStream`
+
+```dart
+StreamBuilder<PlayerActivityState>(
+  stream: controller.playerStateStream,
+  initialData: controller.activityState,
+  builder: (context, snapshot) {
+    final state = snapshot.data ?? PlayerActivityState.idle;
+    if (state == PlayerActivityState.buffering) {
+      return const CircularProgressIndicator();
+    }
+    return Icon(
+      state.isPlaying ? Icons.pause : Icons.play_arrow,
+      color: Colors.white,
+    );
+  },
+)
+```
+
+<Tip>
+  Register `addActivityListener` and `addControlListener` **before** calling `initialize()`. Listeners added after `initialize()` still receive all future events, but they will miss the `initializing` and `initialized` transitions that fire during the initialization handshake. If you add a listener late, the controller immediately replays the current state to it once the video duration is known.
+</Tip>
+
+<Warning>
+  Always remove listeners in `dispose()` — `removeActivityListener` and `removeControlListener` — and cancel any `StreamSubscription`s. Listeners and subscriptions that outlive the widget capture a stale `setState` and cause framework exceptions after the widget is unmounted.
+</Warning>

@@ -1,0 +1,324 @@
+---
+title: "Offline Video Downloads with Progress Tracking"
+sidebarTitle: "Offline Downloads"
+description: "Download videos for offline playback in better_native_video_player using VideoDownloadController with progress streams, persistent download index, cancel, and resume."
+---
+
+`VideoDownloadController` downloads progressive video files (MP4, WebM, and any single-file source) to device storage for fully offline playback. It streams progress updates as the file is written, persists a JSON download index that survives app restarts, and supports cancellation, removal, and resumable lookup by caller-supplied IDs. The plugin deliberately does not depend on `path_provider` — you supply the directory, so you control where files land.
+
+<Note>
+`VideoDownloadController` handles single-file progressive sources. HLS offline downloads (segment-by-segment) require native platform APIs: `AVAssetDownloadTask` on iOS and Media3 `DownloadManager` on Android, which are outside the scope of this controller. For Vimeo content, use `better_native_video_extractor` to resolve a `progressiveUrl` first.
+</Note>
+
+## Creating the Controller
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+import 'package:path_provider/path_provider.dart';
+
+final docs = await getApplicationDocumentsDirectory();
+final downloads = VideoDownloadController(
+  directoryPath: '${docs.path}/video_downloads',
+);
+```
+
+The directory is created automatically on first use. All downloaded files and the `downloads_index.json` index live inside it.
+
+## Downloading a Video
+
+`download()` returns a broadcast `Stream<VideoDownloadProgress>` that emits progress updates and closes after a terminal status. Calling it for an already-downloaded ID immediately emits `completed`; calling it while the same ID is in progress returns the existing stream — no duplicate work.
+
+```dart
+final sub = downloads
+    .download(
+      id: 'lesson-42',
+      url: 'https://example.com/lesson-42.mp4',
+      headers: {'Authorization': 'Bearer $token'}, // optional
+    )
+    .listen((progress) {
+      // progress.fraction is 0.0–1.0 when Content-Length is known,
+      // or null for indeterminate downloads.
+      final pct = progress.fraction != null
+          ? '${(progress.fraction! * 100).round()}%'
+          : '${progress.receivedBytes ~/ 1024} KB';
+
+      print('${progress.status.name} — $pct');
+
+      if (progress.status == VideoDownloadStatus.completed) {
+        print('Saved to disk, ready for offline playback.');
+      }
+      if (progress.status == VideoDownloadStatus.failed) {
+        print('Error: ${progress.error}');
+      }
+    });
+```
+
+### VideoDownloadProgress fields
+
+<ParamField path="id" type="String">
+  The caller-supplied ID this update belongs to.
+</ParamField>
+
+<ParamField path="status" type="VideoDownloadStatus">
+  One of `downloading`, `completed`, `failed`, or `canceled`.
+</ParamField>
+
+<ParamField path="receivedBytes" type="int">
+  Bytes written to disk so far.
+</ParamField>
+
+<ParamField path="totalBytes" type="int?">
+  Total expected bytes from `Content-Length`, or `null` when the server does not provide a size.
+</ParamField>
+
+<ParamField path="fraction" type="double?">
+  Convenience getter: `receivedBytes / totalBytes` clamped to `0.0–1.0`, or `null` when `totalBytes` is unknown.
+</ParamField>
+
+<ParamField path="error" type="String?">
+  Failure description when `status == VideoDownloadStatus.failed`.
+</ParamField>
+
+## Managing Downloads
+
+```dart
+// Cancel an in-flight download and delete the partial file:
+await downloads.cancel('lesson-42');
+
+// Delete the completed file and remove it from the index:
+await downloads.remove('lesson-42');
+
+// List all completed downloads, newest first:
+final List<VideoDownload> all = await downloads.listDownloads();
+
+// Check if a specific ID has a valid completed file:
+final bool ready = await downloads.isDownloaded('lesson-42');
+
+// Get the absolute file path for a completed download:
+final String? path = await downloads.localPathFor('lesson-42');
+```
+
+### VideoDownload fields
+
+<ParamField path="id" type="String">
+  The caller-chosen identifier (e.g. your video or lesson ID).
+</ParamField>
+
+<ParamField path="url" type="String">
+  The source URL the file was downloaded from.
+</ParamField>
+
+<ParamField path="filePath" type="String">
+  Absolute path of the completed file on device storage.
+</ParamField>
+
+<ParamField path="sizeBytes" type="int">
+  File size in bytes.
+</ParamField>
+
+<ParamField path="completedAt" type="DateTime">
+  When the download completed.
+</ParamField>
+
+## Playing Downloaded Videos
+
+Use `localPathFor()` to retrieve the path, then load it as a `file://` URI:
+
+```dart
+final path = await downloads.localPathFor('lesson-42');
+if (path != null) {
+  await controller.load(url: 'file://$path');
+  await controller.play();
+}
+```
+
+Alternatively use the typed convenience method:
+
+```dart
+if (path != null) {
+  await controller.loadFile(path: path);
+}
+```
+
+<Tip>
+Downloaded files replay fully offline — they are not served through the disk cache or any network stack. DRM-protected streams and non-HTTP sources bypass the download index and should not be passed to `VideoDownloadController`.
+</Tip>
+
+## Index Persistence
+
+The download index (`downloads_index.json`) is written to `directoryPath` after each successful download. On the next app launch, `listDownloads()` and `localPathFor()` read from this file, automatically dropping any entries whose files have been deleted externally (e.g. by the user clearing app data or the OS reclaiming cached storage).
+
+Partial files are written with a `.part` suffix and only renamed to their final extension on successful completion, so an interrupted download never leaves a corrupt "completed" entry in the index.
+
+## Platform Notes
+
+<CardGroup cols={2}>
+  <Card title="iOS" icon="apple">
+    Uses `dart:io`'s `HttpClient` for downloading. Files are written to the app's documents directory (or any path you supply), which is backed up by iCloud unless you explicitly exclude it.
+  </Card>
+  <Card title="Android" icon="android">
+    Same `dart:io` implementation. Consider writing to `getExternalStorageDirectory()` for user-visible files, or `getApplicationDocumentsDirectory()` for private ones.
+  </Card>
+</CardGroup>
+
+<Warning>
+`VideoDownloadController` is not WASM-compatible — it relies on `dart:io`. On web, the class is replaced by a no-op stub that always returns `false` / empty lists. Use `kIsWeb` guards if your codebase targets the web.
+</Warning>
+
+## Complete Example: Download Screen
+
+The following example mirrors the demo in `example/lib/screens/perf/download_screen.dart` and shows the full download lifecycle: status display, progress bar, cancel, play offline, and remove.
+
+```dart
+import 'dart:async';
+
+import 'package:better_native_video_player/better_native_video_player.dart';
+import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+
+class DownloadScreen extends StatefulWidget {
+  const DownloadScreen({super.key});
+
+  @override
+  State<DownloadScreen> createState() => _DownloadScreenState();
+}
+
+class _DownloadScreenState extends State<DownloadScreen> {
+  static const String _videoId = 'sintel-trailer';
+  static const String _videoUrl =
+      'https://media.w3.org/2010/05/sintel/trailer.mp4';
+
+  late final NativeVideoPlayerController _player;
+  VideoDownloadController? _downloads;
+  StreamSubscription<VideoDownloadProgress>? _progressSub;
+
+  String _statusText = 'Checking…';
+  double? _fraction;
+  String? _localPath;
+  bool _showPlayer = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _player = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: false,
+    );
+    _init();
+  }
+
+  Future<void> _init() async {
+    final docs = await getApplicationDocumentsDirectory();
+    _downloads = VideoDownloadController(
+      directoryPath: '${docs.path}/video_downloads',
+    );
+    await _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final path = await _downloads!.localPathFor(_videoId);
+    if (!mounted) return;
+    setState(() {
+      _localPath = path;
+      _statusText = path == null ? 'Not downloaded' : 'Downloaded ✓';
+      _fraction = path == null ? null : 1.0;
+    });
+  }
+
+  void _startDownload() {
+    _progressSub?.cancel();
+    _progressSub = _downloads!
+        .download(id: _videoId, url: _videoUrl)
+        .listen((p) {
+          if (!mounted) return;
+          setState(() {
+            _fraction = p.fraction;
+            _statusText = switch (p.status) {
+              VideoDownloadStatus.downloading => p.fraction != null
+                  ? 'Downloading… ${(p.fraction! * 100).round()}%'
+                  : 'Downloading… ${p.receivedBytes ~/ 1024} KB',
+              VideoDownloadStatus.completed => 'Downloaded ✓',
+              VideoDownloadStatus.failed => 'Failed: ${p.error}',
+              VideoDownloadStatus.canceled => 'Canceled',
+            };
+          });
+          if (p.status == VideoDownloadStatus.completed) {
+            _refresh();
+          }
+        });
+  }
+
+  Future<void> _playOffline() async {
+    final path = _localPath;
+    if (path == null) return;
+    setState(() => _showPlayer = true);
+    // Let the platform view mount before loading.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await _player.initialize();
+    await _player.load(url: 'file://$path', force: true);
+  }
+
+  @override
+  void dispose() {
+    _progressSub?.cancel();
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Offline Downloads')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_statusText,
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: _fraction),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ElevatedButton(
+                  onPressed: _startDownload,
+                  child: const Text('Download'),
+                ),
+                ElevatedButton(
+                  onPressed: () => _downloads?.cancel(_videoId),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: _localPath != null ? _playOffline : null,
+                  child: const Text('Play offline'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    await _downloads?.remove(_videoId);
+                    await _refresh();
+                  },
+                  child: const Text('Remove'),
+                ),
+              ],
+            ),
+            if (_showPlayer) ...[
+              const SizedBox(height: 16),
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: ColoredBox(
+                  color: Colors.black,
+                  child: NativeVideoPlayer(controller: _player),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+```

@@ -1,0 +1,240 @@
+---
+title: "NativeVideoPlayerController: Manage Video Playback"
+sidebarTitle: "Controller"
+description: "NativeVideoPlayerController drives native video on iOS and Android. Learn to create, initialize, configure, load, and dispose controllers correctly."
+---
+
+`NativeVideoPlayerController` is the bridge between Flutter and the native video player on each platform — AVPlayerViewController on iOS and ExoPlayer (Media3) on Android. Every player instance you place on screen is bound to one controller, and all playback commands, state reads, and event subscriptions go through it. Understanding how to construct, initialize, load, and dispose a controller correctly is the foundation of building reliable video experiences with `better_native_video_player`.
+
+## Constructor parameters
+
+The constructor accepts a required `id` plus a set of optional flags that configure the native player before it is ever created. All parameters are `final`; to change them after creation you must create a new controller.
+
+<ParamField path="id" type="int" required>
+  Unique integer identifier for this player instance. Every controller that maps to a separate native player must have a distinct `id`. Two controllers sharing the same `id` **share the same underlying native player** — this is the mechanism used to keep video playing while navigating between screens (see [Multiple controllers](#multiple-controllers) below).
+</ParamField>
+
+<ParamField path="autoPlay" type="bool" default="false">
+  When `true`, the native player starts playing as soon as `load()` completes, without an explicit `play()` call.
+</ParamField>
+
+<ParamField path="mediaInfo" type="NativeVideoPlayerMediaInfo?" default="null">
+  Metadata shown in the system Now Playing panel (Control Center on iOS, lock-screen notification on Android). Accepts `title`, `subtitle`, `album`, and `artworkUrl`. Pass `null` to omit Now Playing integration.
+</ParamField>
+
+<ParamField path="allowsPictureInPicture" type="bool" default="true">
+  Master switch for Picture-in-Picture. When `false`, both automatic and manual PiP are disabled for this controller, regardless of device capability.
+</ParamField>
+
+<ParamField path="canStartPictureInPictureAutomatically" type="bool" default="true">
+  When `true`, the system may start PiP automatically when the app moves to the background — iOS 14.2+ only; Android requires the video to be in Dart fullscreen mode first.
+</ParamField>
+
+<ParamField path="lockToLandscape" type="bool" default="true">
+  When entering fullscreen, the player locks the device to landscape orientation. Set to `false` if your app supports portrait fullscreen or manages orientation externally.
+</ParamField>
+
+<ParamField path="enableHDR" type="bool" default="true">
+  Enables HDR rendering. Disable this if HDR content appears washed-out or too bright on the target device.
+</ParamField>
+
+<ParamField path="enableLooping" type="bool" default="false">
+  The native player replays from the beginning when it reaches the end of the video. Can also be toggled at runtime via `setLooping(bool)`.
+</ParamField>
+
+<ParamField path="showNativeControls" type="bool" default="true">
+  Displays the platform's built-in playback controls. When you supply an `overlayBuilder` to the `NativeVideoPlayer` widget, native controls are hidden automatically regardless of this flag.
+</ParamField>
+
+<ParamField path="preventFullscreenSwipeDismiss" type="bool" default="true">
+  iOS only. Disables `AVPlayerViewController`'s internal swipe-to-dismiss gesture, which can leave the inline player with a black screen. Fullscreen can only be exited via the Done button when `true`. Has no effect on Android or on Dart-side fullscreen.
+</ParamField>
+
+<ParamField path="preferredOrientations" type="List<DeviceOrientation>?">
+  Declares which orientations your app supports. Stored on `FullscreenManager` and restored automatically when the user exits fullscreen. When `null` all orientations remain available.
+</ParamField>
+
+## Controller lifecycle
+
+A controller moves through a predictable sequence of states before video can play:
+
+<Steps>
+  <Step title="Create the controller">
+    Instantiate `NativeVideoPlayerController` with a unique `id` and any desired flags. At this point no native resources have been allocated.
+
+    ```dart
+    final controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: false,
+      allowsPictureInPicture: true,
+    );
+    ```
+  </Step>
+
+  <Step title="Register event listeners">
+    Add activity and control listeners **before** calling `initialize()`. Events emitted during initialization are delivered immediately to listeners that are already registered.
+
+    ```dart
+    controller.addActivityListener(_onActivity);
+    controller.addControlListener(_onControl);
+    ```
+  </Step>
+
+  <Step title="Embed the widget and call initialize()">
+    Place `NativeVideoPlayer(controller: controller)` in your widget tree. The widget creates the native platform view, and calling `initialize()` waits for that creation to complete.
+
+    ```dart
+    await controller.initialize();
+    ```
+  </Step>
+
+  <Step title="Load a video source">
+    Once initialized, call `loadUrl()`, `loadFile()`, or the generic `load()` to supply a video source. The controller transitions through `loading` → `loaded`.
+
+    ```dart
+    await controller.loadUrl(
+      url: 'https://example.com/video.m3u8',
+    );
+    ```
+  </Step>
+
+  <Step title="Play">
+    If `autoPlay` is `false`, call `play()` to start playback.
+
+    ```dart
+    await controller.play();
+    ```
+  </Step>
+
+  <Step title="Dispose">
+    In your widget's `dispose()`, call `controller.dispose()` for a full teardown or `controller.releaseResources()` when sharing the controller across screens.
+
+    ```dart
+    @override
+    void dispose() {
+      controller.removeActivityListener(_onActivity);
+      controller.removeControlListener(_onControl);
+      controller.dispose();
+      super.dispose();
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  `initialize()` must be awaited before you call `load()`. Calling `load()` without a completed initialization throws an exception because no platform channel exists yet to carry the request to the native player.
+</Note>
+
+## Full creation example
+
+The snippet below shows a complete `StatefulWidget` that follows the lifecycle above with common production options:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+class MyVideoPage extends StatefulWidget {
+  const MyVideoPage({super.key});
+
+  @override
+  State<MyVideoPage> createState() => _MyVideoPageState();
+}
+
+class _MyVideoPageState extends State<MyVideoPage> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      allowsPictureInPicture: true,
+      canStartPictureInPictureAutomatically: true,
+      lockToLandscape: true,
+      enableHDR: true,
+      enableLooping: false,
+      showNativeControls: false, // hidden because we use a custom overlay
+      preventFullscreenSwipeDismiss: true,
+      preferredOrientations: [DeviceOrientation.portraitUp],
+      mediaInfo: const NativeVideoPlayerMediaInfo(
+        title: 'Big Buck Bunny',
+        subtitle: 'Blender Foundation',
+        artworkUrl: 'https://example.com/poster.jpg',
+      ),
+    );
+
+    // Register listeners BEFORE initialize()
+    _controller.addActivityListener(_onActivity);
+    _controller.addControlListener(_onControl);
+
+    _initPlayer();
+  }
+
+  Future<void> _initPlayer() async {
+    await _controller.initialize();
+    await _controller.loadUrl(
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    );
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    if (event.state == PlayerActivityState.error) {
+      debugPrint('Playback error: ${event.data?['message']}');
+    }
+  }
+
+  void _onControl(PlayerControlEvent event) {
+    if (event.state == PlayerControlState.timeUpdated) {
+      // position updates arrive here
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeActivityListener(_onActivity);
+    _controller.removeControlListener(_onControl);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: NativeVideoPlayer(
+        controller: _controller,
+        overlayBuilder: (ctx, ctrl) => MyOverlay(controller: ctrl),
+      ),
+    );
+  }
+}
+```
+
+## Multiple controllers
+
+Each `NativeVideoPlayerController` with a **distinct** `id` manages an independent native player. Use unique IDs when you want isolated, parallel players — for example, two videos side-by-side in a split-screen layout:
+
+```dart
+final controller1 = NativeVideoPlayerController(id: 1, autoPlay: false);
+final controller2 = NativeVideoPlayerController(id: 2, autoPlay: false);
+```
+
+### Shared controller pattern
+
+Two controllers with the **same** `id` share the underlying native player. This is the recommended pattern for navigating from a list screen (thumbnail/preview) to a detail screen (full controls) without interrupting playback or reloading the video:
+
+```dart
+// List screen — preview player
+final listController = NativeVideoPlayerController(id: 42, autoPlay: false);
+
+// Detail screen — reuses the same native player
+final detailController = NativeVideoPlayerController(id: 42, autoPlay: true);
+```
+
+When the list screen is about to be disposed, call `releaseResources()` (not `dispose()`) so the native player stays alive for the detail screen. See the [Lifecycle guide](/guides/lifecycle) for a full walkthrough of this pattern.
+
+<Tip>
+  Automatic PiP transfers to whichever view was most recently registered with the shared `id`. In a list-to-detail navigation this means PiP naturally follows the detail screen.
+</Tip>

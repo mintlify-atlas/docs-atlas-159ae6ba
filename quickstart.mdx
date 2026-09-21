@@ -1,47 +1,241 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with better_native_video_player"
+sidebarTitle: "Quickstart"
+description: "Install better_native_video_player, configure iOS and Android, create your first NativeVideoPlayerController, and play a video in under 5 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through adding `better_native_video_player` to an existing Flutter project, wiring up a `NativeVideoPlayerController`, and rendering a live HLS stream inside a `NativeVideoPlayer` widget. The whole flow takes about five minutes and requires no platform-specific code changes beyond the one-time setup described in [Platform Setup](/platform-setup).
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+### Add the dependency
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Open your project's `pubspec.yaml` and add the package under `dependencies`:
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  better_native_video_player: ^1.5.2
+```
+
+### Fetch packages
+
+Run Flutter's package tool from your project root to download the plugin and its transitive dependencies (`floating`, `multicast_dns`):
+
+```bash
+flutter pub get
+```
+
+### Create a StatefulWidget with a controller
+
+Create a new file — for example `video_player_page.dart` — and set up a `StatefulWidget`. The controller must be created before `initialize()` is called, and any event listeners must be registered **before** `initialize()` is awaited so that early events (like `initialized`) are never missed.
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+class VideoPlayerPage extends StatefulWidget {
+  const VideoPlayerPage({super.key});
+
+  @override
+  State<VideoPlayerPage> createState() => _VideoPlayerPageState();
+}
+
+class _VideoPlayerPageState extends State<VideoPlayerPage> {
+  late NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializePlayer();
+  }
+
+  Future<void> _initializePlayer() async {
+    // 1. Create the controller with a unique integer ID.
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: true,
+    );
+
+    // 2. Register listeners BEFORE calling initialize() so that
+    //    no early events are dropped.
+    _controller.addActivityListener(_onActivity);
+
+    // 3. Initialize — waits for the platform view to be ready.
+    await _controller.initialize();
+
+    // 4. Load a video source.
+    await _controller.loadUrl(
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    );
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    debugPrint('Player event: ${event.state}');
+  }
+
+  @override
+  void dispose() {
+    _controller.removeActivityListener(_onActivity);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: NativeVideoPlayer(controller: _controller),
+    );
+  }
+}
+```
+
+<Note>
+  Always register listeners with `addActivityListener` / `addControlListener` **before** calling `initialize()`. The controller starts emitting events as soon as the platform view is created, which can happen before `initialize()` returns.
+</Note>
+
+### Call initialize() and loadUrl()
+
+`initialize()` waits for the underlying platform view to be ready. `loadUrl()` (or the generic `load()`) then hands the URL to the native player. Both are `async` methods — `await` each one in sequence:
+
+```dart
+await _controller.initialize();
+
+// HLS adaptive stream
+await _controller.loadUrl(
+  url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+);
+
+// MP4 direct URL
+// await _controller.loadUrl(
+//   url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+// );
+
+// Local file from device storage
+// await _controller.loadFile(path: '/storage/emulated/0/DCIM/video.mp4');
+```
+
+If `autoPlay` is `false`, call `await _controller.play()` after `loadUrl()` returns to start playback manually.
+
+### Embed the NativeVideoPlayer widget
+
+Place the `NativeVideoPlayer` widget wherever you want the video surface to appear. It expands to fill its parent by default, so wrap it in a `SizedBox` or `AspectRatio` to constrain its dimensions:
+
+```dart
+// Full-screen surface
+body: NativeVideoPlayer(controller: _controller),
+
+// Fixed aspect ratio (e.g. 16:9)
+body: Center(
+  child: AspectRatio(
+    aspectRatio: 16 / 9,
+    child: NativeVideoPlayer(controller: _controller),
+  ),
+),
+```
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Complete Working Example
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Here is the full `StatefulWidget` from the steps above, ready to drop into any Flutter project:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+class VideoPlayerPage extends StatefulWidget {
+  const VideoPlayerPage({super.key});
+
+  @override
+  State<VideoPlayerPage> createState() => _VideoPlayerPageState();
+}
+
+class _VideoPlayerPageState extends State<VideoPlayerPage> {
+  late NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializePlayer();
+  }
+
+  Future<void> _initializePlayer() async {
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: true,
+      allowsPictureInPicture: true,
+    );
+
+    // Register listeners before initialize() — never miss an early event.
+    _controller.addActivityListener(_onActivity);
+    _controller.addControlListener(_onControl);
+
+    await _controller.initialize();
+
+    await _controller.loadUrl(
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    );
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    switch (event.state) {
+      case PlayerActivityState.playing:
+        debugPrint('▶ Playing');
+      case PlayerActivityState.paused:
+        debugPrint('⏸ Paused');
+      case PlayerActivityState.buffering:
+        debugPrint('⏳ Buffering');
+      case PlayerActivityState.completed:
+        debugPrint('✅ Completed');
+      case PlayerActivityState.error:
+        debugPrint('❌ Error: ${event.data?['message']}');
+      default:
+        break;
+    }
+  }
+
+  void _onControl(PlayerControlEvent event) {
+    if (event.state == PlayerControlState.timeUpdated) {
+      final position = event.data?['position'] as int?;
+      final duration = event.data?['duration'] as int?;
+      debugPrint('Position: ${position}ms / ${duration}ms');
+    }
+  }
+
+  @override
+  void dispose() {
+    // Always remove listeners before disposing the controller.
+    _controller.removeActivityListener(_onActivity);
+    _controller.removeControlListener(_onControl);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(title: const Text('Native Video Player')),
+      body: NativeVideoPlayer(controller: _controller),
+    );
+  }
+}
+```
+
+## Next Steps
+
+Before running on a physical device, complete the platform configuration so that HTTP videos load, background audio works, and PiP is enabled:
+
+<CardGroup cols={2}>
+  <Card title="Platform Setup" icon="wrench" href="/platform-setup">
+    Configure Info.plist (iOS) and AndroidManifest.xml (Android) for all features.
+  </Card>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Full feature overview, architecture details, and companion packages.
+  </Card>
+</CardGroup>

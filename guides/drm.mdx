@@ -1,0 +1,175 @@
+---
+title: "DRM: FairPlay, Widevine, AES-128, and ClearKey"
+sidebarTitle: "DRM"
+description: "Configure DRM-protected video in better_native_video_player. Supports FairPlay Streaming on iOS, Widevine on Android, AES-128 HLS encryption, and ClearKey for testing."
+---
+
+`better_native_video_player` supports protected video playback through a unified `drmConfig` parameter on `load()`, `loadUrl()`, and `loadFile()`. The plugin delegates license handling to the native DRM frameworks — `AVFoundation` on iOS and ExoPlayer's DRM engine on Android — so no additional packages are required. Platform differences are abstracted away: you supply the right `type` value and the plugin takes care of the rest.
+
+## Supported DRM Types
+
+| Platform | DRM Type | Description |
+|---|---|---|
+| iOS | **FairPlay Streaming** | Apple's DRM solution for HLS content. Requires a certificate URL and a license server. |
+| iOS | **AES-128** | Standard HLS segment encryption. Keys are extracted from the HLS manifest — no license server needed. |
+| Android | **Widevine** | Google's DRM framework, integrated via ExoPlayer. Supports HLS and DASH streams. |
+| Android | **AES-128** | Standard HLS segment encryption on Android. Same behaviour as on iOS. |
+| Both | **ClearKey** | Unencrypted key system for testing and development. Not suitable for production. |
+
+## `drmConfig` Parameter
+
+Pass a `Map<String, dynamic>` to the `drmConfig` parameter of `load()`, `loadUrl()`, or `loadFile()`:
+
+```dart
+await controller.loadUrl(
+  url: 'https://example.com/protected-stream.m3u8',
+  drmConfig: {
+    'type': 'fairplay',
+    'licenseUrl': 'https://license.example.com/get',
+    'certificateUrl': 'https://cert.example.com/cert.der',
+    'headers': {
+      'Authorization': 'Bearer <token>',
+    },
+  },
+);
+```
+
+### Fields
+
+<ParamField body="type" type="String" required>
+  The DRM type to use. Accepted values: `'fairplay'` (iOS), `'widevine'` (Android), `'aes-128'` (both), `'clearKey'` (both).
+</ParamField>
+
+<ParamField body="licenseUrl" type="String">
+  URL of the license server that issues decryption keys. Required for FairPlay, Widevine, and ClearKey. Not required for AES-128 (keys come from the HLS manifest).
+</ParamField>
+
+<ParamField body="certificateUrl" type="String">
+  URL of the FairPlay Streaming certificate (DER-encoded). **Required for FairPlay on iOS only.** The plugin fetches the certificate automatically and uses it for every license request.
+</ParamField>
+
+<ParamField body="headers" type="Map<String, String>">
+  HTTP headers added to every license request. Use this for authentication tokens, custom header requirements, or content-type overrides.
+</ParamField>
+
+## Platform-Specific Examples
+
+<Tabs>
+  <Tab title="iOS — FairPlay">
+    FairPlay Streaming is Apple's HLS-only DRM. The plugin fetches the certificate from `certificateUrl` automatically before making the first license request.
+
+    ```dart
+    await controller.loadUrl(
+      url: 'https://example.com/fairplay-stream.m3u8',
+      drmConfig: {
+        'type': 'fairplay',
+        'licenseUrl': 'https://license.example.com/fairplay',
+        'certificateUrl': 'https://cert.example.com/fairplay.der',
+        'headers': {
+          'Authorization': 'Bearer your-token-here',
+        },
+      },
+    );
+    ```
+
+    **Requirements:**
+    - HLS streams (`.m3u8`) only.
+    - `certificateUrl` must return a valid DER-encoded certificate.
+    - The license server must implement the FairPlay Streaming key request protocol.
+    - Test on a physical device — simulators have FairPlay limitations.
+  </Tab>
+  <Tab title="Android — Widevine">
+    Widevine is Google's DRM framework, used by default with ExoPlayer. It supports both HLS and DASH streams.
+
+    ```dart
+    await controller.loadUrl(
+      url: 'https://example.com/widevine-stream.m3u8',
+      drmConfig: {
+        'type': 'widevine',
+        'licenseUrl': 'https://license.example.com/widevine',
+        'headers': {
+          'Authorization': 'Bearer your-token-here',
+          'Content-Type': 'application/octet-stream',
+        },
+      },
+    );
+    ```
+
+    **Requirements:**
+    - `licenseUrl` must implement the Widevine PSSH license request format.
+    - Widevine L1 (hardware-backed) and L3 (software) are both supported.
+    - Test on a physical device for L1 compliance.
+  </Tab>
+  <Tab title="AES-128">
+    AES-128 is the most common HLS encryption method. Keys are referenced directly in the playlist — no license server is needed. Works identically on both iOS and Android.
+
+    ```dart
+    await controller.loadUrl(
+      url: 'https://example.com/aes128-stream.m3u8',
+      drmConfig: {
+        'type': 'aes-128',
+        // No licenseUrl or certificateUrl needed.
+        // The native player fetches keys from URIs in the HLS manifest.
+      },
+    );
+    ```
+
+    **Notes:**
+    - Key URIs in the manifest must be reachable by the device.
+    - If the key server requires authentication, add `headers` to pass credentials.
+    - Suitable for both VOD and live HLS streams.
+  </Tab>
+  <Tab title="ClearKey (Testing)">
+    ClearKey provides an unencrypted key exchange for development and integration testing. Do not use it in production.
+
+    ```dart
+    await controller.loadUrl(
+      url: 'https://example.com/clearkey-stream.m3u8',
+      drmConfig: {
+        'type': 'clearKey',
+        'licenseUrl': 'https://license.example.com/clearkey',
+      },
+    );
+    ```
+
+    **Notes:**
+    - Useful for testing your DRM plumbing without real keys.
+    - The license server returns keys in plain JSON — there is no encryption of the key material itself.
+  </Tab>
+</Tabs>
+
+## Error Handling
+
+DRM errors are surfaced through the standard activity event system as `PlayerActivityState.error`:
+
+```dart
+controller.addActivityListener((event) {
+  if (event.state == PlayerActivityState.error) {
+    final message = event.data?['message'] as String?;
+    print('Player error: $message');
+    // Inspect message to determine if it is DRM-related
+  }
+});
+```
+
+Common DRM error messages and their causes:
+
+| Error | Likely Cause |
+|---|---|
+| License server unavailable | Network error or incorrect `licenseUrl`. |
+| Invalid certificate (FairPlay) | `certificateUrl` returned a malformed or expired DER certificate. |
+| License denied by server | The license server rejected the token — check `headers` and expiry. |
+| Network error during license request | Firewall, offline device, or certificate pinning issue. |
+| Unsupported DRM type for platform | Using `'fairplay'` on Android or `'widevine'` on iOS. |
+
+## Best Practices
+
+<Tip>
+Always use HTTPS for `licenseUrl` and `certificateUrl`. Many DRM servers reject plaintext HTTP connections outright.
+</Tip>
+
+1. **Validate certificates early.** For FairPlay, ping `certificateUrl` from your backend CI pipeline to catch expiry before users do.
+2. **Pass short-lived tokens in `headers`.** Embedding tokens in the URL makes them visible in logs; using the `Authorization` header is safer.
+3. **Test on physical devices.** Simulators and emulators have limited DRM support — L1 Widevine and FairPlay hardware paths both require real hardware.
+4. **Handle license renewal for long sessions.** For live streams or long VODs, license expiry mid-playback surfaces the same `error` event. Re-call `loadUrl()` with a fresh token to recover.
+5. **Be aware of platform DRM format differences.** FairPlay uses a proprietary key request format; Widevine uses PSSH/CENC. The same license server cannot serve both without a protocol-aware proxy.

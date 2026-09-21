@@ -1,0 +1,242 @@
+---
+title: "Picture-in-Picture Mode on iOS and Android"
+sidebarTitle: "Picture-in-Picture"
+description: "Enable automatic and manual Picture-in-Picture in better_native_video_player on iOS 14+ and Android 8+. Covers auto-PiP, manual entry, state tracking, and platform differences."
+---
+
+Picture-in-Picture (PiP) lets your video continue playing in a compact floating window while the user navigates to other apps or returns to the home screen. `better_native_video_player` supports both automatic and manual PiP entry on iOS 14+ and Android 8+, though each platform has different requirements and constraints worth understanding before you build your UI.
+
+## iOS Setup
+
+On iOS, PiP is powered by `AVPictureInPictureController` and works in both normal and fullscreen modes. Two background modes must be active for it to function.
+
+**Option 1 — Info.plist directly:**
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+    <string>picture-in-picture</string>
+</array>
+```
+
+Both `audio` and `picture-in-picture` are required. The `audio` key enables background audio and AirPlay; `picture-in-picture` gates the PiP API.
+
+**Option 2 — Xcode Capabilities UI:**
+
+Open your target in Xcode, go to **Signing & Capabilities**, click **+ Capability**, and add **Background Modes**. Then check **"Audio, AirPlay, and Picture in Picture"**. Xcode writes both keys into `Info.plist` automatically.
+
+<Note>
+Automatic PiP — where the system starts PiP when the user backgrounds the app — requires iOS 14.2+. The `canStartPictureInPictureAutomatically` controller flag (default `true`) enables this behaviour. Manual PiP entry via `enterPictureInPicture()` works on iOS 14+.
+</Note>
+
+## Android Setup
+
+On Android, PiP is handled by the [floating](https://pub.dev/packages/floating) package, which the plugin integrates with automatically. There is no additional `AndroidManifest.xml` configuration required from your side — the plugin already declares `android:supportsPictureInPicture="true"` on the activity.
+
+<Warning>
+On Android, PiP (both automatic and manual) is **only available when the video is in Dart fullscreen mode** — i.e., when the `NativeVideoPlayer` widget has an `overlayBuilder`. This ensures only the video surface appears in the PiP window, not surrounding app UI. Enter fullscreen before calling `enterPictureInPicture()`.
+</Warning>
+
+Android 8.0+ (API 26+) is required. When `canStartPictureInPictureAutomatically` is `true` and the video is in fullscreen, pressing the home button automatically transitions to PiP.
+
+## Controller Configuration
+
+Configure PiP permissions when constructing the controller:
+
+```dart
+final controller = NativeVideoPlayerController(
+  id: 1,
+  allowsPictureInPicture: true,               // master PiP switch (default: true)
+  canStartPictureInPictureAutomatically: true, // auto-PiP on background (default: true)
+);
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `allowsPictureInPicture` | `true` | Master switch — set `false` to disable PiP entirely for this controller. |
+| `canStartPictureInPictureAutomatically` | `true` | iOS 14.2+: start PiP automatically when the app goes to the background. Android 8+: start PiP automatically when the home button is pressed (requires fullscreen). |
+
+## Manual PiP Entry
+
+Check availability first, then call `enterPictureInPicture()`:
+
+```dart
+// Check availability (respects allowsPictureInPicture and platform constraints)
+final available = await controller.isPictureInPictureAvailable();
+
+if (available) {
+  await controller.enterPictureInPicture();
+}
+
+// Exit PiP
+await controller.exitPictureInPicture();
+
+// Toggle
+await controller.togglePictureInPicture();
+```
+
+On Android, `isPictureInPictureAvailable()` returns `false` unless the video is currently in fullscreen mode. Call `enterFullScreen()` first, then `enterPictureInPicture()`:
+
+```dart
+// Android-specific flow
+await controller.enterFullScreen();
+final available = await controller.isPictureInPictureAvailable();
+if (available) {
+  await controller.enterPictureInPicture();
+}
+```
+
+## State Tracking
+
+Listen to PiP state changes using the dedicated stream or control event listeners:
+
+```dart
+// Stream approach
+controller.isPipEnabledStream.listen((isPip) {
+  print('PiP active: $isPip');
+});
+
+// Stream for availability changes
+controller.isPipAvailableStream.listen((isAvailable) {
+  print('PiP available: $isAvailable');
+});
+
+// Event listener approach
+controller.addControlListener((event) {
+  if (event.state == PlayerControlState.pipStarted) {
+    print('Entered PiP');
+  } else if (event.state == PlayerControlState.pipStopped) {
+    print('Exited PiP');
+  }
+});
+```
+
+### Ground-Truth Query
+
+The `isPipEnabled` property is event-driven on iOS but poll-derived on Android (150 ms cadence, only while in fullscreen). On Android lifecycle transitions — such as the `BackgroundPlaybackGuard` deciding whether to pause — use `getPictureInPictureStatus()` for a direct platform query:
+
+```dart
+// Returns the actual platform PiP state and refreshes the cached flag
+final inPip = await controller.getPictureInPictureStatus();
+```
+
+## Full Example
+
+The example below demonstrates a PiP harness that matches the pattern from the plugin's own test screen:
+
+```dart
+class PipExampleScreen extends StatefulWidget {
+  const PipExampleScreen({super.key});
+
+  @override
+  State<PipExampleScreen> createState() => _PipExampleScreenState();
+}
+
+class _PipExampleScreenState extends State<PipExampleScreen> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: false,
+      // Disable automatic PiP for manual-only demo
+      canStartPictureInPictureAutomatically: false,
+    );
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _controller.initialize();
+    await _controller.load(
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Picture-in-Picture')),
+      body: Column(
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: NativeVideoPlayer(
+              controller: _controller,
+              // overlayBuilder is required for Android PiP
+              overlayBuilder: (context, controller) => const SizedBox(),
+            ),
+          ),
+          StreamBuilder<bool>(
+            stream: _controller.isPipEnabledStream,
+            initialData: false,
+            builder: (context, snapshot) => Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('PiP active: ${snapshot.data}'),
+            ),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              ElevatedButton(
+                // Android: enter fullscreen first
+                onPressed: () => _controller.enterFullScreen(),
+                child: const Text('Enter Fullscreen'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final ok = await _controller.enterPictureInPicture();
+                  debugPrint('PiP entered: $ok');
+                },
+                child: const Text('Enter PiP'),
+              ),
+              ElevatedButton(
+                onPressed: () => _controller.exitPictureInPicture(),
+                child: const Text('Exit PiP'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+## Shared Controller and Auto-PiP
+
+When the same controller `id` is used across multiple views (for example, a list screen and a detail screen sharing the same native player), automatic PiP transfers to the **most recently active** platform view. Both controllers can have `canStartPictureInPictureAutomatically: true`; the plugin attaches automatic PiP to whichever view became primary last.
+
+```dart
+// List screen controller
+final listController = NativeVideoPlayerController(
+  id: 100,
+  canStartPictureInPictureAutomatically: true,
+);
+
+// Detail screen controller — same ID, same native player
+final detailController = NativeVideoPlayerController(
+  id: 100,
+  canStartPictureInPictureAutomatically: true,
+);
+// Navigating to the detail screen transfers auto-PiP to that view.
+```
+
+## Platform Summary
+
+| Feature | iOS | Android |
+|---|---|---|
+| Minimum OS | iOS 14+ | API 26 (Android 8.0+) |
+| Automatic PiP (background) | iOS 14.2+ | Requires Dart fullscreen |
+| Manual PiP | ✅ inline or fullscreen | ✅ Dart fullscreen only |
+| Requires `overlayBuilder` | No | Yes |
+| Native implementation | `AVPictureInPictureController` | `floating` package |

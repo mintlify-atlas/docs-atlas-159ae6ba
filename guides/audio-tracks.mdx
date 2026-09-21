@@ -1,0 +1,272 @@
+---
+title: "Audio Track Selection for HLS Streams"
+sidebarTitle: "Audio Tracks"
+description: "List and switch alternate audio renditions in better_native_video_player, including dubbed languages and audio descriptions for HLS streams on iOS and Android."
+---
+
+HLS master manifests can contain multiple `EXT-X-MEDIA` audio renditions — dubbed languages, audio descriptions for visually impaired viewers, director commentaries, and more. `better_native_video_player` surfaces these as `NativeVideoPlayerAudioTrack` objects and lets you switch between them at runtime on both iOS and Android.
+
+## Listing Available Audio Tracks
+
+Call `getAvailableAudioTracks()` after the video has loaded and playback has started. The native player needs a moment to parse the manifest and enumerate renditions.
+
+```dart
+_controller.addActivityListener((event) async {
+  if (event.state == PlayerActivityState.playing) {
+    final tracks = await _controller.getAvailableAudioTracks();
+    for (final track in tracks) {
+      print(
+        '${track.displayName} (${track.language}) '
+        '— currently selected: ${track.isSelected}',
+      );
+    }
+  }
+});
+```
+
+Returns `List<NativeVideoPlayerAudioTrack>`. Returns an **empty list** for single-audio streams (MP4, single-rendition HLS).
+
+## `NativeVideoPlayerAudioTrack` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `int` | Track index in the platform's audio track enumeration |
+| `language` | `String` | BCP-47 language code, e.g. `"en"`, `"nl"`, `"en-US"` |
+| `displayName` | `String` | Human-readable name, e.g. `"English"`, `"English (audio description)"` |
+| `isSelected` | `bool` | Whether this rendition is currently active |
+
+## Switching Audio Tracks
+
+Pass any `NativeVideoPlayerAudioTrack` from the list directly to `setAudioTrack`:
+
+```dart
+final tracks = await _controller.getAvailableAudioTracks();
+
+// Switch to Dutch
+final dutch = tracks.firstWhere(
+  (t) => t.language == 'nl',
+  orElse: () => tracks.first,
+);
+await _controller.setAudioTrack(dutch);
+```
+
+The switch happens mid-playback without interruption. A `PlayerControlState.audioTrackChanged` control event is emitted after the switch completes.
+
+## Reacting to Audio Track Changes
+
+Listen for the control event if you need to update UI state after a track switch (including switches initiated outside of your app, e.g. via native controls or remote commands):
+
+```dart
+_controller.addControlListener((PlayerControlEvent event) {
+  if (event.state == PlayerControlState.audioTrackChanged) {
+    // Re-fetch the list to get accurate isSelected flags
+    _controller.getAvailableAudioTracks().then((tracks) {
+      if (mounted) setState(() => _audioTracks = tracks);
+    });
+  }
+});
+```
+
+## Building an Audio Track Picker
+
+```dart
+class AudioTrackPicker extends StatefulWidget {
+  final NativeVideoPlayerController controller;
+  const AudioTrackPicker({required this.controller, super.key});
+
+  @override
+  State<AudioTrackPicker> createState() => _AudioTrackPickerState();
+}
+
+class _AudioTrackPickerState extends State<AudioTrackPicker> {
+  List<NativeVideoPlayerAudioTrack> _tracks = [];
+
+  @override
+  void initState() {
+    super.initState();
+    // Load tracks once playback starts
+    widget.controller.addActivityListener(_onActivity);
+    // Track changes from any source
+    widget.controller.addControlListener(_onControl);
+  }
+
+  void _onActivity(PlayerActivityEvent event) async {
+    if (event.state == PlayerActivityState.playing && _tracks.isEmpty) {
+      final tracks = await widget.controller.getAvailableAudioTracks();
+      if (mounted) setState(() => _tracks = tracks);
+    }
+  }
+
+  void _onControl(PlayerControlEvent event) async {
+    if (event.state == PlayerControlState.audioTrackChanged) {
+      final tracks = await widget.controller.getAvailableAudioTracks();
+      if (mounted) setState(() => _tracks = tracks);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeActivityListener(_onActivity);
+    widget.controller.removeControlListener(_onControl);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_tracks.isEmpty) return const SizedBox.shrink();
+
+    return PopupMenuButton<NativeVideoPlayerAudioTrack>(
+      icon: const Icon(Icons.audiotrack, color: Colors.white),
+      tooltip: 'Audio track',
+      onSelected: (track) => widget.controller.setAudioTrack(track),
+      itemBuilder: (_) => _tracks
+          .map(
+            (track) => PopupMenuItem(
+              value: track,
+              child: Row(
+                children: [
+                  if (track.isSelected)
+                    const Icon(Icons.check, size: 18)
+                  else
+                    const SizedBox(width: 18),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(track.displayName),
+                      Text(
+                        track.language,
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+```
+
+## Complete Screen Example
+
+```dart
+class AudioTrackScreen extends StatefulWidget {
+  const AudioTrackScreen({super.key});
+  @override
+  State<AudioTrackScreen> createState() => _AudioTrackScreenState();
+}
+
+class _AudioTrackScreenState extends State<AudioTrackScreen> {
+  late final NativeVideoPlayerController _controller;
+  List<NativeVideoPlayerAudioTrack> _tracks = [];
+
+  // Apple's Big Buck Bunny multi-audio demo stream
+  static const _url =
+      'https://devstreaming-cdn.apple.com/videos/streaming/examples/'
+      'img_bipbop_adv_example_fmp4/master.m3u8';
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(id: 1, autoPlay: true);
+    _controller.addActivityListener(_onActivity);
+    _controller.addControlListener(_onControl);
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _controller.initialize();
+    await _controller.loadUrl(url: _url);
+  }
+
+  void _onActivity(PlayerActivityEvent e) async {
+    if (e.state == PlayerActivityState.playing && _tracks.isEmpty) {
+      // Brief delay to let the manifest parse finish on both platforms
+      await Future.delayed(const Duration(milliseconds: 500));
+      final tracks = await _controller.getAvailableAudioTracks();
+      if (mounted) setState(() => _tracks = tracks);
+    }
+  }
+
+  void _onControl(PlayerControlEvent e) async {
+    if (e.state == PlayerControlState.audioTrackChanged) {
+      final tracks = await _controller.getAvailableAudioTracks();
+      if (mounted) setState(() => _tracks = tracks);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeActivityListener(_onActivity);
+    _controller.removeControlListener(_onControl);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Audio Tracks')),
+      body: Column(
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: NativeVideoPlayer(controller: _controller),
+          ),
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Audio Renditions',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ),
+          if (_tracks.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No alternate audio tracks found.'),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _tracks.length,
+              itemBuilder: (_, i) {
+                final track = _tracks[i];
+                return ListTile(
+                  leading: track.isSelected
+                      ? const Icon(Icons.radio_button_checked)
+                      : const Icon(Icons.radio_button_unchecked),
+                  title: Text(track.displayName),
+                  subtitle: Text(track.language),
+                  onTap: () => _controller.setAudioTrack(track),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+## Platform Notes
+
+<CardGroup cols={2}>
+  <Card title="iOS — AVFoundation" icon="apple">
+    Audio track switching uses `AVMediaSelectionGroup` with `AVMediaCharacteristicAudible`. The selection is applied to the `AVPlayerItem` and takes effect on the next segment boundary. Tracks include automatic language metadata from the manifest, so `displayName` and `language` are always populated.
+  </Card>
+  <Card title="Android — ExoPlayer" icon="android">
+    Audio track switching uses ExoPlayer's `TrackSelectionParameters` API from the Media3 library. The switch applies at the next keyframe boundary. `displayName` is populated from the `NAME` attribute of the `EXT-X-MEDIA` tag; `language` comes from `LANGUAGE`.
+  </Card>
+</CardGroup>
+
+<Note>
+  Audio track selection only works for HLS streams that include multiple `EXT-X-MEDIA` audio renditions in the master manifest. Progressive MP4 files and single-rendition HLS streams always return an empty list from `getAvailableAudioTracks()`.
+</Note>

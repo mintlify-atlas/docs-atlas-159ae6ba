@@ -1,0 +1,151 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "better_native_video_player",
+  "projectDescription": "A Flutter plugin for native video playback on iOS and Android using AVPlayer and ExoPlayer, with HLS streaming, DRM, Chromecast, AirPlay, Picture-in-Picture, background playback, subtitles, offline downloads, and performance tuning for multi-video feeds.",
+  "theme": "luma",
+  "primaryColor": "#254a76",
+  "lightColor": "#33b7f3",
+  "darkColor": "#04589c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "platform-setup"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "guides/controller",
+              "guides/widget",
+              "guides/events",
+              "guides/lifecycle"
+            ]
+          },
+          {
+            "group": "Playback Features",
+            "pages": [
+              "guides/loading-video",
+              "guides/playback-controls",
+              "guides/quality-selection",
+              "guides/subtitles",
+              "guides/audio-tracks"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "guides/picture-in-picture",
+              "guides/fullscreen",
+              "guides/drm",
+              "guides/chromecast",
+              "guides/airplay",
+              "guides/offline-downloads",
+              "guides/playlists",
+              "guides/performance"
+            ]
+          },
+          {
+            "group": "Companion Packages",
+            "pages": [
+              "guides/extractor",
+              "guides/analytics"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/native-video-player-controller",
+              "api/native-video-player-widget",
+              "api/native-video-player-config"
+            ]
+          },
+          {
+            "group": "Models & Enums",
+            "pages": [
+              "api/models",
+              "api/events"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "api/services"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Native AVPlayer (iOS) and ExoPlayer/Media3 (Android) integration",
+    "HLS adaptive streaming with quality selection and viewport-based capping",
+    "DRM support: FairPlay (iOS), Widevine (Android), AES-128, ClearKey",
+    "Picture-in-Picture on both platforms with automatic state management",
+    "AirPlay support with device availability and connection tracking",
+    "Chromecast: pure-Dart device discovery and full cast session control",
+    "Offline video downloads with progress streams and local playback",
+    "Sidecar subtitles (VTT/SRT) with fully styleable Flutter overlay",
+    "Embedded HLS subtitle tracks with native text-size scaling",
+    "Audio track selection across alternate renditions",
+    "Background playback with Now Playing / media notifications",
+    "Texture rendering mode (experimental) for scroll-feed performance",
+    "Disk cache and precache for Android (Media3 LRU cache)",
+    "Resume positions, A-B loop/clip ranges, and playlist auto-advance",
+    "Playback analytics: startup time, stalls, watched duration, quality switches",
+    "NativeVideoPlayerConfig global performance tuning knobs",
+    "Scrub-preview storyboards (WebVTT and sprite-sheet grids)",
+    "WASM compatible"
+  ],
+  "publicApiSurface": [
+    "NativeVideoPlayerController",
+    "NativeVideoPlayer (widget)",
+    "NativeVideoPlayerConfig",
+    "NativeVideoPlayerAndroidBufferConfig",
+    "NativeVideoPlayerIosBufferConfig",
+    "NativeVideoPlayerMediaInfo",
+    "NativeVideoPlayerState",
+    "NativeVideoPlayerQuality",
+    "NativeVideoPlayerSubtitleTrack",
+    "NativeVideoPlayerSubtitleStyle",
+    "NativeVideoPlayerSidecarSubtitle",
+    "NativeVideoPlayerAudioTrack",
+    "NativeVideoPlayerPlaybackRange",
+    "NativeVideoPlayerDownload",
+    "NativeVideoPlayerVideoSize",
+    "PlayerActivityState (enum)",
+    "PlayerControlState (enum)",
+    "NativeVideoPlayerEvent",
+    "PlayerActivityEvent",
+    "PlayerControlEvent",
+    "NativeVideoPlayerPlaylist",
+    "NativeVideoPlayerPlaylistItem",
+    "PlaybackAnalytics",
+    "PositionCheckpoints",
+    "BackgroundPlaybackGuard",
+    "StoryboardThumbnails",
+    "VideoDownloadController",
+    "NativeVideoPlayerCache",
+    "AirPlayStateManager",
+    "FullscreenManager",
+    "FullscreenVideoPlayer",
+    "CastDeviceDiscovery (cast.dart)",
+    "CastSession (cast.dart)",
+    "CastDevice",
+    "VimeoExtractor (better_native_video_extractor)",
+    "VideoExtractionCache (better_native_video_extractor)",
+    "SubtitleFormat",
+    "SubtitleCue"
+  ]
+}

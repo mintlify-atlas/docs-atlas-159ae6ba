@@ -1,0 +1,205 @@
+---
+title: "Events and Enums API Reference"
+sidebarTitle: "Events & Enums"
+description: "All enums and event types in better_native_video_player: PlayerActivityState, PlayerControlState, PlayerActivityEvent, PlayerControlEvent, and NativeVideoPlayerEvent."
+---
+
+The plugin communicates playback changes through two parallel event streams on the controller: an _activity stream_ for lifecycle transitions (loading, playing, buffering, error) and a _control stream_ for user or programmatic interactions (quality changes, seeks, PiP, fullscreen). Both streams carry typed event objects whose `state` field is one of the enums described below. Register listeners with `controller.addActivityListener()` and `controller.addControlListener()`.
+
+---
+
+## PlayerActivityState
+
+`PlayerActivityState` tracks the playback lifecycle. The current value is always available at `controller.activityState` and as `NativeVideoPlayerState.activityState`.
+
+| Value | Description |
+|-------|-------------|
+| `idle` | No video loaded; player is freshly created or has been stopped and reset. |
+| `initializing` | Platform view is being set up. |
+| `initialized` | Platform view is ready; a video can be loaded. |
+| `loading` | `load()` has been called; the media item is being resolved/fetched. |
+| `loaded` | Media is ready to play (metadata parsed, first frame available). |
+| `playing` | Video is actively playing back. |
+| `paused` | Playback is paused. |
+| `buffering` | Playback is stalled waiting for data (network or disk). |
+| `completed` | Playback reached the end of the video. |
+| `stopped` | Playback was stopped explicitly (not by completion). |
+| `error` | An unrecoverable playback error occurred. |
+
+**Extension getters** (available on any `PlayerActivityState` value)
+
+```dart
+state.isPlaying   // true when == playing
+state.isPaused    // true when == paused
+state.isBuffering // true when == buffering
+state.isLoading   // true when == loading
+state.isLoaded    // true when == loaded
+state.hasError    // true when == error
+state.isCompleted // true when == completed
+state.isStopped   // true when == stopped
+state.isInitialized // true when == initialized
+state.isInitializing // true when == initializing
+state.isIdle      // true when == idle
+```
+
+---
+
+## PlayerControlState
+
+`PlayerControlState` records the most recent user or programmatic control action. It is surfaced in `PlayerControlEvent.state` and as `NativeVideoPlayerState.controlState`.
+
+| Value | Description |
+|-------|-------------|
+| `none` | No control action pending (default/reset value). |
+| `qualityChanged` | Active HLS quality variant was changed (adaptive or manual). |
+| `speedChanged` | Playback speed was changed. |
+| `seeked` | The playback position was seeked. |
+| `pipStarted` | Picture-in-Picture mode started. |
+| `pipStopped` | Picture-in-Picture mode ended. |
+| `pipAvailabilityChanged` | PiP availability changed (device capability or policy). |
+| `airPlayAvailabilityChanged` | An AirPlay receiver appeared or disappeared. |
+| `airPlayConnected` | Successfully connected to an AirPlay device. |
+| `airPlayDisconnected` | Disconnected from an AirPlay device. |
+| `fullscreenEntered` | The player entered fullscreen mode. |
+| `fullscreenExited` | The player exited fullscreen mode. |
+| `timeUpdated` | The playback position ticked forward (periodic update). |
+| `subtitleTrackChanged` | The active subtitle track was changed. |
+| `audioTrackChanged` | The active audio track was changed. |
+
+---
+
+## PlayerActivityEvent
+
+`PlayerActivityEvent` is the object delivered to every activity listener registered with `controller.addActivityListener(void Function(PlayerActivityEvent) listener)`.
+
+<Accordion title="PlayerActivityEvent fields">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `state` | `PlayerActivityState` | The lifecycle state this event represents. |
+| `data` | `Map<String, dynamic>?` | Optional extra data. For `error` events, `data['message']` contains the human-readable error description. `null` when there is no extra payload. |
+
+```dart
+controller.addActivityListener((event) {
+  switch (event.state) {
+    case PlayerActivityState.error:
+      final message = event.data?['message'] ?? 'Unknown error';
+      showErrorDialog(message);
+    case PlayerActivityState.completed:
+      onVideoEnded();
+    default:
+      break;
+  }
+});
+```
+
+</Accordion>
+
+---
+
+## PlayerControlEvent
+
+`PlayerControlEvent` is the object delivered to every control listener registered with `controller.addControlListener(void Function(PlayerControlEvent) listener)`.
+
+<Accordion title="PlayerControlEvent fields">
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `state` | `PlayerControlState` | The control action this event represents. |
+| `data` | `Map<String, dynamic>?` | Optional extra data. For seek events, `data` carries position info. For quality/speed events, `data` carries the new value. `null` when there is no extra payload. |
+
+```dart
+controller.addControlListener((event) {
+  switch (event.state) {
+    case PlayerControlState.qualityChanged:
+      print('Quality → ${event.data}');
+    case PlayerControlState.seeked:
+      print('Seeked to ${event.data}');
+    case PlayerControlState.fullscreenEntered:
+      hideCustomChrome();
+    case PlayerControlState.fullscreenExited:
+      showCustomChrome();
+    default:
+      break;
+  }
+});
+```
+
+</Accordion>
+
+---
+
+## Full event-handling example
+
+The snippet below shows a complete listener setup that handles errors gracefully, tracks playback completion, and updates a custom progress indicator independently of the state widget.
+
+```dart
+class _VideoPageState extends State<VideoPage> {
+  late NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController();
+    _controller.addActivityListener(_onActivity);
+    _controller.addControlListener(_onControl);
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    if (event.state.hasError) {
+      final msg = event.data?['message'] ?? 'Playback error';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg)));
+      return;
+    }
+    if (event.state.isCompleted) {
+      _handleCompletion();
+    }
+  }
+
+  void _onControl(PlayerControlEvent event) {
+    if (event.state == PlayerControlState.timeUpdated) {
+      setState(() {}); // refresh seek bar
+    }
+    if (event.state == PlayerControlState.pipStarted) {
+      // hide any floating UI elements
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeActivityListener(_onActivity);
+    _controller.removeControlListener(_onControl);
+    _controller.dispose();
+    super.dispose();
+  }
+}
+```
+
+<Tip>
+  Prefer `controller.stateStream` (a `ValueStream`) for UI rebuilds — it batches state changes and avoids redundant `setState` calls. Reserve the raw activity/control listeners for side-effects such as analytics, logging, or triggering navigation.
+</Tip>
+
+---
+
+## Detecting and recovering from errors
+
+When `PlayerActivityState.error` fires the player has reached a terminal state for that media item. The standard recovery pattern is to reload the video from the beginning or present the error to the user.
+
+```dart
+controller.addActivityListener((event) async {
+  if (!event.state.hasError) return;
+
+  final errorMessage = event.data?['message'] ?? 'Unknown playback error';
+  debugPrint('Playback error: $errorMessage');
+
+  // Attempt to reload after a short delay
+  await Future<void>.delayed(const Duration(seconds: 2));
+  await controller.load(url: videoUrl);
+  await controller.play();
+});
+```
+
+<Warning>
+  Do not call `controller.play()` directly inside an error listener without a delay or retry guard — the error state is terminal and an immediate reload may enter a rapid retry loop on persistent network failures.
+</Warning>

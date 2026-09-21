@@ -1,0 +1,197 @@
+---
+title: "Controller Lifecycle and Resource Management"
+sidebarTitle: "Lifecycle"
+description: "Learn when to call dispose() for full teardown versus releaseResources() for temporary cleanup when sharing a NativeVideoPlayerController across screens."
+---
+
+Every `NativeVideoPlayerController` owns both Flutter-side resources (event channels, stream controllers, listener lists, platform view references) and native-side resources (the `AVPlayer` on iOS or the ExoPlayer `Player` on Android). Getting cleanup right is crucial: tear down too aggressively and you lose the video when navigating between screens; tear down too lightly and you accumulate native players that consume memory, decoder slots, and network connections. The controller exposes two distinct disposal methods — `dispose()` and `releaseResources()` — that map to those two goals.
+
+## Two cleanup paths
+
+### `dispose()` — full teardown
+
+`dispose()` destroys everything: it pauses playback, exits fullscreen, cancels all event subscriptions, clears all listener lists and stream controllers, and then sends a native `dispose` command that deallocates the `AVPlayer` / ExoPlayer instance. After calling `dispose()` the controller object itself is dead; do not call any method on it.
+
+Use `dispose()` when the player is genuinely finished — the user has navigated away permanently, closed the screen, or the app is shutting down.
+
+### `releaseResources()` — Flutter-side teardown only
+
+`releaseResources()` pauses playback, exits fullscreen, cancels per-view event subscriptions, and clears all Flutter-side references (platform view IDs, BuildContexts, listener lists, overlay builders). It does **not** send a native dispose command, so the native player remains alive and holds its current position, loaded source, and buffered data.
+
+Use `releaseResources()` when the Flutter screen is being destroyed but you intend to reuse the same controller `id` on another screen — the classic list → detail navigation.
+
+## Choosing the right method
+
+| Scenario | Recommended method | Reason |
+|---|---|---|
+| User leaves the app or closes the video permanently | `dispose()` | All resources, including the native player, must be freed. |
+| Navigating from a list screen to a detail screen sharing the same controller `id` | `releaseResources()` on the list screen | The detail screen reconnects to the still-live native player. |
+| Temporarily hiding a video player (e.g. a collapsed card) | `releaseResources()` | Playback position and loaded source are preserved for quick resume. |
+| Logging out or performing a global reset | `dispose()` | Guarantees complete deallocation of all platform resources. |
+
+## What `dispose()` does, step by step
+
+<Steps>
+  <Step title="Mark as disposed">
+    Sets an internal `_isDisposed` flag immediately so no further events or stream emissions are processed.
+  </Step>
+  <Step title="Cancel timers and watchdogs">
+    Cancels the Android PiP poll timer, the buffering-debounce timer, and both stalled-playback watchdog timers.
+  </Step>
+  <Step title="Pause and exit fullscreen">
+    Sends a `pause()` command to the native player (with a short settle delay) and calls `exitFullScreen()` if the player is currently fullscreen.
+  </Step>
+  <Step title="Cancel event subscriptions">
+    Cancels every per-view EventChannel subscription and the controller-level EventChannel subscription used for PiP and AirPlay events.
+  </Step>
+  <Step title="Dispose native resources">
+    Sends the `dispose` method call through the platform channel, which deallocates the `AVPlayer` / ExoPlayer instance and releases decoder and network resources on the native side.
+  </Step>
+  <Step title="Close stream controllers">
+    Closes all broadcast `StreamController`s (position, duration, state, PiP, fullscreen, quality, etc.) so any remaining listeners receive a `done` event.
+  </Step>
+  <Step title="Clear Flutter-side state">
+    Clears listener lists, platform view maps, overlay builders, and sets the URL and internal state to their zero values.
+  </Step>
+</Steps>
+
+## What `releaseResources()` does, step by step
+
+<Steps>
+  <Step title="Pause playback">
+    Calls `pause()` so the native player stops consuming network and decoder resources while no Flutter surface is attached.
+  </Step>
+  <Step title="Exit fullscreen if active">
+    Calls `exitFullScreen()` to ensure the Dart fullscreen dialog is dismissed before the platform view is released.
+  </Step>
+  <Step title="Cancel per-view event subscriptions">
+    Cancels every per-view EventChannel subscription. The **controller-level** EventChannel (for PiP and AirPlay events) is intentionally kept alive so those events continue to flow even without a mounted view.
+  </Step>
+  <Step title="Cancel timers">
+    Cancels the buffering-debounce timer and both stalled-playback watchdog timers.
+  </Step>
+  <Step title="Clear event handlers and platform view references">
+    Empties all activity, control, and AirPlay listener lists, clears platform view IDs and BuildContext references, and nulls the method channel reference.
+  </Step>
+  <Step title="Preserve everything else">
+    The native player, its position, the loaded URL, the player state, and all stream controllers are untouched. A new `NativeVideoPlayer` widget that registers with the same controller `id` will reconnect the native surface and the streams will resume emitting from their current values.
+  </Step>
+</Steps>
+
+## Full example: list screen → detail screen
+
+The pattern below uses a single `NativeVideoPlayerController` instance passed by reference from a list screen to a detail screen. The list screen calls `releaseResources()` so the native player survives the navigation; the detail screen calls `dispose()` when the user presses Back.
+
+```dart
+// ── List screen ──────────────────────────────────────────────────────────────
+
+class VideoListScreen extends StatefulWidget {
+  const VideoListScreen({super.key});
+
+  @override
+  State<VideoListScreen> createState() => _VideoListScreenState();
+}
+
+class _VideoListScreenState extends State<VideoListScreen> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // Stable ID shared with the detail screen
+    _controller = NativeVideoPlayerController(id: 100, autoPlay: false);
+    _initPlayer();
+  }
+
+  Future<void> _initPlayer() async {
+    await _controller.initialize();
+    await _controller.loadUrl(
+      url: 'https://example.com/video.m3u8',
+    );
+  }
+
+  @override
+  void dispose() {
+    // Keep the native player alive — the detail screen will reuse it
+    _controller.releaseResources();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: SizedBox(
+        width: 120,
+        height: 68,
+        child: NativeVideoPlayer(controller: _controller),
+      ),
+      title: const Text('My Video'),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => VideoDetailScreen(controller: _controller),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Detail screen ─────────────────────────────────────────────────────────────
+
+class VideoDetailScreen extends StatefulWidget {
+  final NativeVideoPlayerController controller;
+
+  const VideoDetailScreen({required this.controller, super.key});
+
+  @override
+  State<VideoDetailScreen> createState() => _VideoDetailScreenState();
+}
+
+class _VideoDetailScreenState extends State<VideoDetailScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Re-register listeners on the shared controller
+    widget.controller.addActivityListener(_onActivity);
+    // initialize() is idempotent — safe to call again; it fast-paths when
+    // the native player is already ready
+    widget.controller.initialize().then((_) => widget.controller.play());
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    if (event.state == PlayerActivityState.error) {
+      debugPrint('Error: ${event.data?['message']}');
+    }
+  }
+
+  @override
+  void dispose() {
+    // Remove listeners before disposing
+    widget.controller.removeActivityListener(_onActivity);
+    // Full teardown — the detail screen owns the player's lifetime
+    widget.controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: NativeVideoPlayer(
+        controller: widget.controller,
+        overlayBuilder: (ctx, ctrl) => MyDetailOverlay(controller: ctrl),
+      ),
+    );
+  }
+}
+```
+
+<Warning>
+  Always call `removeActivityListener` / `removeControlListener` **before** `dispose()`. Listener callbacks that reference widget state via closures will be invoked by `dispose()` during its pause step if they are still registered, which can trigger framework errors on an already-unmounted widget.
+</Warning>
+
+<Note>
+  When using the shared controller `id` pattern alongside automatic PiP (`canStartPictureInPictureAutomatically: true`), PiP naturally follows the most recently registered platform view. After the user navigates from the list to the detail screen, automatic PiP targets the detail view — no extra configuration is needed.
+</Note>

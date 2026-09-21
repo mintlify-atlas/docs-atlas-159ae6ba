@@ -1,0 +1,268 @@
+---
+title: "AirPlay Support on iOS with Availability Tracking"
+sidebarTitle: "AirPlay"
+description: "Enable AirPlay in better_native_video_player on iOS with automatic availability detection, connection state tracking, and device name reporting."
+---
+
+AirPlay is an iOS-only feature that lets your app stream video to Apple TV, HomePod, and other AirPlay‑enabled receivers using AVFoundation's native route-selection infrastructure. The plugin's global `AirPlayStateManager` singleton monitors device availability and connection state once for the entire app — not per‑controller — so all video players stay in sync without redundant system calls.
+
+## Setup
+
+No additional configuration beyond the standard `UIBackgroundModes` entry is required. AirPlay routing is handled by AVFoundation automatically once the capability is declared. If it is not already present, add the following to your `ios/Runner/Info.plist`:
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+    <string>picture-in-picture</string>
+</array>
+```
+
+<Note>
+Both `audio` and `picture-in-picture` are needed for background audio, automatic PiP, and AirPlay to work together. You can also enable them through Xcode: **Target → Signing & Capabilities → Background Modes → Audio, AirPlay, and Picture in Picture**.
+</Note>
+
+## Initializing Global AirPlay Detection
+
+Call `AirPlayStateManager.instance.init()` once at app startup. It is safe to call on Android and the web — it returns immediately on those platforms. If no controller exists yet when `init()` is called, detection starts automatically as soon as the first `NativeVideoPlayerController` is created.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Safe to call before any controller exists; detection defers until
+  // the first controller registers its method channel.
+  await AirPlayStateManager.instance.init();
+
+  runApp(const MyApp());
+}
+```
+
+<Tip>
+Call `AirPlayStateManager.instance.dispose()` only at full app shutdown. This is a singleton — disposing it mid-session stops detection for every controller in the app.
+</Tip>
+
+## Listening to AirPlay State
+
+The controller exposes both callback-style listeners and reactive streams. Use whichever fits your state-management approach.
+
+### Callback listeners
+
+```dart
+@override
+void initState() {
+  super.initState();
+  _controller.addAirPlayAvailabilityListener(_onAvailabilityChanged);
+  _controller.addAirPlayConnectionListener(_onConnectionChanged);
+}
+
+void _onAvailabilityChanged(bool isAvailable) {
+  // Show or hide your AirPlay button
+  setState(() => _airplayAvailable = isAvailable);
+}
+
+void _onConnectionChanged(bool isConnected) {
+  // Update UI to reflect the active session
+  setState(() => _airplayConnected = isConnected);
+}
+
+@override
+void dispose() {
+  _controller.removeAirPlayAvailabilityListener(_onAvailabilityChanged);
+  _controller.removeAirPlayConnectionListener(_onConnectionChanged);
+  _controller.dispose();
+  super.dispose();
+}
+```
+
+### Reactive streams
+
+```dart
+@override
+void initState() {
+  super.initState();
+
+  // isAirplayAvailableStream emits the current value immediately on subscribe,
+  // then all future changes.
+  _controller.isAirplayAvailableStream.listen((available) {
+    setState(() => _airplayAvailable = available);
+  });
+
+  _controller.isAirplayConnectedStream.listen((connected) {
+    setState(() => _airplayConnected = connected);
+  });
+
+  // Connecting state: true while a connection attempt is in progress.
+  _controller.isAirplayConnectingStream.listen((connecting) {
+    setState(() => _airplayConnecting = connecting);
+  });
+
+  // Device name: non-null while connected, null when disconnected.
+  _controller.airPlayDeviceNameStream.listen((name) {
+    setState(() => _deviceName = name);
+  });
+}
+```
+
+## AirPlay State Properties
+
+The synchronous properties on the controller reflect the same global state:
+
+<AccordionGroup>
+  <Accordion title="isAirplayAvailable">
+    `bool` — `true` when at least one AirPlay receiver is reachable on the local network.
+  </Accordion>
+  <Accordion title="isAirplayConnected">
+    `bool` — `true` while the app is actively routing video to an AirPlay device.
+  </Accordion>
+  <Accordion title="isAirplayConnecting">
+    `bool` — `true` during the brief handshake period between tapping a device and the connection completing.
+  </Accordion>
+  <Accordion title="airPlayDeviceName">
+    `String?` — the display name of the currently connected device (e.g. `"Living Room TV"`), or `null` when not connected. The manager caches the last known name so it remains readable through transient iOS `nil` reports while still connected.
+  </Accordion>
+</AccordionGroup>
+
+## Showing the AirPlay Picker
+
+Present the native iOS route picker — the familiar popover that lists available receivers:
+
+```dart
+ElevatedButton(
+  onPressed: _airplayAvailable
+      ? () => _controller.showAirPlayPicker()
+      : null,
+  child: const Text('AirPlay…'),
+)
+```
+
+You can also trigger it globally (without a specific controller reference) via the singleton:
+
+```dart
+await AirPlayStateManager.instance.showAirPlayPicker();
+```
+
+## Viewport Quality and Subtitles During AirPlay
+
+Two behaviors apply automatically when AirPlay external playback is active:
+
+<CardGroup cols={2}>
+  <Card title="Quality cap lifted" icon="arrow-up">
+    When `qualityForViewportSize` is enabled in `NativeVideoPlayerConfig`, the HLS ABR cap that normally limits each tile to its on-screen pixel size is **lifted automatically** during AirPlay external playback. The stream switches to the best available quality for the receiver's display.
+  </Card>
+  <Card title="Sidecar subtitles stay on-device" icon="subtitles">
+    Sidecar (external VTT/SRT) subtitles are rendered in a Flutter overlay on the **phone screen** during AirPlay, not on the receiver. The receiver shows only the video. Use embedded HLS text tracks when captions must appear on the TV.
+  </Card>
+</CardGroup>
+
+<Note>
+To send captions to the AirPlay receiver, embed subtitle renditions in your HLS manifest (`#EXT-X-MEDIA:TYPE=SUBTITLES`). Selecting an embedded track via `setSubtitleTrack()` travels with the stream and the receiver renders them natively.
+</Note>
+
+## Background Playback and AirPlay
+
+`BackgroundPlaybackGuard` pauses the player when the app is backgrounded. AirPlay sessions are deliberately **exempt** from this auto-pause — the user intentionally routed video to an external screen, so pausing it on background would be disruptive:
+
+```dart
+// Pauses on background, but NOT during AirPlay or PiP:
+final guard = BackgroundPlaybackGuard(_controller);
+guard.pauseInBackground = true; // default; flip at runtime for a user toggle
+
+// Clean up alongside the controller:
+guard.dispose();
+```
+
+## Full Example: AirPlay Status Indicator
+
+The snippet below builds a minimal status widget that shows device availability, connection state (including the device name), and a button to open the system picker.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+import 'package:flutter/material.dart';
+
+class AirPlayStatusIndicator extends StatefulWidget {
+  const AirPlayStatusIndicator({required this.controller, super.key});
+  final NativeVideoPlayerController controller;
+
+  @override
+  State<AirPlayStatusIndicator> createState() => _AirPlayStatusIndicatorState();
+}
+
+class _AirPlayStatusIndicatorState extends State<AirPlayStatusIndicator> {
+  bool _available = false;
+  bool _connected = false;
+  bool _connecting = false;
+  String? _deviceName;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addAirPlayAvailabilityListener(_onAvailable);
+    widget.controller.addAirPlayConnectionListener(_onConnected);
+
+    _connected = widget.controller.isAirplayConnected;
+    _available = widget.controller.isAirplayAvailable;
+    _deviceName = widget.controller.airPlayDeviceName;
+
+    widget.controller.isAirplayConnectingStream.listen((v) {
+      if (mounted) setState(() => _connecting = v);
+    });
+    widget.controller.airPlayDeviceNameStream.listen((name) {
+      if (mounted) setState(() => _deviceName = name);
+    });
+  }
+
+  void _onAvailable(bool v) {
+    if (mounted) setState(() => _available = v);
+  }
+
+  void _onConnected(bool v) {
+    if (mounted) setState(() => _connected = v);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeAirPlayAvailabilityListener(_onAvailable);
+    widget.controller.removeAirPlayConnectionListener(_onConnected);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color iconColor = _connected
+        ? Colors.blue
+        : _available
+            ? Colors.white
+            : Colors.white38;
+
+    final String label = _connecting
+        ? 'Connecting…'
+        : _connected
+            ? 'AirPlay: ${_deviceName ?? 'Connected'}'
+            : _available
+                ? 'AirPlay available'
+                : 'No AirPlay receivers';
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          icon: Icon(Icons.airplay, color: iconColor),
+          tooltip: label,
+          onPressed: _available
+              ? () => widget.controller.showAirPlayPicker()
+              : null,
+        ),
+        if (_connected || _connecting)
+          Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+      ],
+    );
+  }
+}
+```
+
+<Info>
+`AirPlayStateManager` emits the **current value immediately** on every new stream subscription, so widgets that subscribe in `initState` will receive the current state before the first frame — no need to call `isAirPlayAvailable()` separately.
+</Info>

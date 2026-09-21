@@ -1,0 +1,660 @@
+---
+title: "NativeVideoPlayerController API Reference"
+sidebarTitle: "Controller"
+description: "Complete API reference for NativeVideoPlayerController: constructor params, load methods, playback controls, subtitle/audio/quality, PiP, fullscreen, streams, and disposal."
+---
+
+`NativeVideoPlayerController` is the central class that drives all video playback in `better_native_video_player`. It bridges Dart to the native layer (AVFoundation on iOS, ExoPlayer/Media3 on Android) via platform channels, exposing a unified API for loading media, controlling playback, managing fullscreen and Picture-in-Picture, selecting subtitles and audio tracks, and observing state changes through streams and event listeners.
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+```
+
+---
+
+## Constructor
+
+Create a controller instance before placing the `NativeVideoPlayer` widget in your tree. Pass `autoPlay: true` to begin playback as soon as the media is loaded, or call `play()` manually after receiving the `loaded` activity state.
+
+```dart
+final controller = NativeVideoPlayerController(
+  id: 1,
+  autoPlay: true,
+  lockToLandscape: true,
+  preferredOrientations: [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
+);
+```
+
+<ParamField path="id" type="int" required>
+  Unique identifier for this player instance. Must be distinct across all live controllers in the same process. Used to route platform-channel events to the correct controller.
+</ParamField>
+
+<ParamField path="autoPlay" type="bool" default="false">
+  When `true`, the player starts playing automatically as soon as `load()` (or `loadUrl()` / `loadFile()`) completes.
+</ParamField>
+
+<ParamField path="mediaInfo" type="NativeVideoPlayerMediaInfo?">
+  Optional metadata (title, subtitle, artwork URL) for the system Now Playing / media session. Appears on the Control Center, lock screen, and CarPlay.
+</ParamField>
+
+<ParamField path="allowsPictureInPicture" type="bool" default="true">
+  Enables Picture-in-Picture support. When `false`, all PiP methods are no-ops and `isPictureInPictureAvailable()` returns `false`.
+</ParamField>
+
+<ParamField path="canStartPictureInPictureAutomatically" type="bool" default="true">
+  iOS 14.2+: allows the system to start PiP automatically when the app goes to the background. On Android, enables `OnLeavePiP` via the `floating` package when the player is in fullscreen.
+</ParamField>
+
+<ParamField path="lockToLandscape" type="bool" default="true">
+  When entering fullscreen, locks the device orientation to landscape. On exit the controller restores either `preferredOrientations` (if provided) or allows all orientations.
+</ParamField>
+
+<ParamField path="enableHDR" type="bool" default="true">
+  Enables HDR playback. Set to `false` on devices that show washed-out or over-exposed video with HDR content.
+</ParamField>
+
+<ParamField path="enableLooping" type="bool" default="false">
+  Makes the player restart from the beginning when the video reaches its end. Can also be changed at runtime with `setLooping(bool)`.
+</ParamField>
+
+<ParamField path="showNativeControls" type="bool" default="true">
+  Shows the platform's native player controls. Automatically overridden to `false` when an `overlayBuilder` is provided to the `NativeVideoPlayer` widget.
+</ParamField>
+
+<ParamField path="preventFullscreenSwipeDismiss" type="bool" default="true">
+  iOS only. Disables `AVPlayerViewController`'s internal swipe-to-dismiss gesture, which can leave the inline player with a black screen. When `true`, the native fullscreen can only be exited via the **Done** button.
+</ParamField>
+
+<ParamField path="preferredOrientations" type="List<DeviceOrientation>?">
+  Device orientations to restore when exiting fullscreen. Passed to `FullscreenManager.setPreferredOrientations`. When `null`, all orientations are permitted after exiting fullscreen.
+</ParamField>
+
+---
+
+## Lifecycle methods
+
+### `initialize()`
+
+```dart
+Future<void> initialize()
+```
+
+Waits for the underlying native platform view to be created and the method channel to be ready. Call this before `load()` if you need to ensure the controller is ready programmatically. It is safe to call multiple times — subsequent calls return immediately once already initialized.
+
+### `releaseResources()`
+
+```dart
+Future<void> releaseResources()
+```
+
+Pauses playback and tears down all Flutter-side resources (event subscriptions, listeners, contexts, method-channel reference) **without** destroying the native player. The native player remains alive at its current position. Use this when navigating away from a screen temporarily — when the `NativeVideoPlayer` widget is re-inserted into the tree, the controller reconnects transparently and `emitCurrentStateToAllListeners()` restores all observers.
+
+<Tip>
+  Prefer `releaseResources()` in `dispose()` for list-detail navigation patterns where you want to resume playback when the user returns to the same video.
+</Tip>
+
+### `dispose()`
+
+```dart
+Future<void> dispose()
+```
+
+Fully destroys both Flutter and native resources, including the AVPlayer/ExoPlayer instance. Call this when the video player is no longer needed. After disposal all method calls are no-ops.
+
+<Warning>
+  After calling `dispose()` the controller cannot be reused. Create a new controller if you need to play another video.
+</Warning>
+
+---
+
+## Load methods
+
+All load methods require the platform view to be created (i.e., the `NativeVideoPlayer` widget must be in the tree) and accept an optional `startAt` duration to resume from a saved position without a visible seek flash.
+
+### `loadUrl()`
+
+```dart
+Future<void> loadUrl({
+  required String url,
+  Map<String, String>? headers,
+  Map<String, dynamic>? drmConfig,
+  Duration? startAt,
+  bool force = false,
+})
+```
+
+Loads a remote video URL. Supports HLS (`.m3u8`), MP4, and any other format natively supported by AVFoundation / ExoPlayer.
+
+<ParamField path="url" type="String" required>
+  Full HTTPS (or HTTP) URL to the video resource.
+</ParamField>
+
+<ParamField path="headers" type="Map<String, String>?">
+  HTTP request headers sent with every segment request, e.g. `{'Referer': 'https://example.com'}` or authorization tokens.
+</ParamField>
+
+<ParamField path="drmConfig" type="Map<String, dynamic>?">
+  DRM configuration map. Keys: `type` (`'widevine'`, `'fairplay'`, `'clearKey'`, `'aes-128'`), `licenseUrl`, `certificateUrl` (iOS FairPlay only), `headers` (license-request headers).
+</ParamField>
+
+<ParamField path="startAt" type="Duration?">
+  Seek position applied natively before the first frame — no visible seek flash at startup.
+</ParamField>
+
+<ParamField path="force" type="bool" default="false">
+  When `true`, loads even if the player is already in the `loaded` state. Use this to replace the current video (e.g., advancing a playlist).
+</ParamField>
+
+```dart
+// Plain HLS stream
+await controller.loadUrl(url: 'https://cdn.example.com/stream.m3u8');
+
+// With custom headers
+await controller.loadUrl(
+  url: 'https://cdn.example.com/protected.mp4',
+  headers: {'Authorization': 'Bearer <token>'},
+);
+
+// FairPlay DRM (iOS)
+await controller.loadUrl(
+  url: 'https://cdn.example.com/drm-stream.m3u8',
+  drmConfig: {
+    'type': 'fairplay',
+    'licenseUrl': 'https://license.example.com/acquire',
+    'certificateUrl': 'https://cert.example.com/cert.der',
+  },
+);
+
+// Resume from saved position
+await controller.loadUrl(
+  url: 'https://cdn.example.com/movie.m3u8',
+  startAt: const Duration(minutes: 12, seconds: 34),
+);
+```
+
+### `loadFile()`
+
+```dart
+Future<void> loadFile({required String path})
+```
+
+Loads a local video file. Automatically prepends `file://` if not already present.
+
+```dart
+// Android
+await controller.loadFile(path: '/storage/emulated/0/DCIM/video.mp4');
+
+// iOS
+await controller.loadFile(path: '/var/mobile/Media/DCIM/100APPLE/clip.MOV');
+```
+
+### `load()` (backward compatible)
+
+```dart
+Future<void> load({
+  required String url,
+  Map<String, String>? headers,
+  Map<String, dynamic>? drmConfig,
+  List<NativeVideoPlayerSidecarSubtitle>? sidecarSubtitles,
+  Duration? startAt,
+  bool force = false,
+})
+```
+
+Unified load method that accepts both remote URLs and `file://` URIs. Also accepts `sidecarSubtitles` to attach external VTT/SRT tracks at load time. `loadUrl` and `loadFile` delegate to this method.
+
+---
+
+## Playback controls
+
+### `play()` / `pause()`
+
+```dart
+Future<void> play()
+Future<void> pause()
+```
+
+Starts or pauses playback. If the native iOS player was evicted by the `iosMaxTotalPlayers` LRU cap, `play()` transparently reloads the last source at the pre-eviction position before resuming.
+
+### `seekTo()`
+
+```dart
+Future<void> seekTo(Duration position)
+```
+
+Seeks to the specified position. The player must be loaded; seeking while in `initializing` or `loading` state is a no-op.
+
+### `setVolume()`
+
+```dart
+Future<void> setVolume(double volume)
+```
+
+Sets the player volume from `0.0` (muted) to `1.0` (full). The value is reflected immediately in the `volume` property.
+
+### `setSpeed()`
+
+```dart
+Future<void> setSpeed(double speed)
+```
+
+Sets the playback rate. `1.0` is normal speed. The new speed is emitted via `speedStream` and reflected in the `speed` property.
+
+### `setLooping()`
+
+```dart
+Future<void> setLooping(bool looping)
+```
+
+Enables or disables video looping at runtime without recreating the controller.
+
+### `setPlaybackRange()`
+
+```dart
+Future<void> setPlaybackRange({
+  required Duration start,
+  required Duration end,
+  bool loop = true,
+})
+```
+
+Confines playback to an A–B range. With `loop: true` (default) the player seeks back to `start` whenever `end` is reached. With `loop: false` it pauses once at `end` and the range is cleared. If the current position is outside the range, the player seeks to `start` immediately.
+
+### `clearPlaybackRange()`
+
+```dart
+void clearPlaybackRange()
+```
+
+Removes the active A–B range and resumes unrestricted playback.
+
+---
+
+## Fullscreen
+
+### `enterFullScreen()` / `exitFullScreen()` / `toggleFullScreen()`
+
+```dart
+Future<void> enterFullScreen()
+Future<void> exitFullScreen()
+Future<void> toggleFullScreen()
+```
+
+Enters, exits, or toggles fullscreen mode. When a custom `overlayBuilder` is set, the Dart fullscreen route is used (a `Navigator.push` dialog that hosts a second `NativeVideoPlayer`). Otherwise the native fullscreen presentation is used (AVPlayerViewController expand on iOS, a Dialog on Android). On Android, `enterFullScreen` also enables automatic PiP so the user can background the app into a PiP window.
+
+<Note>
+  State is reflected immediately in `isFullScreen` and emitted on `isFullscreenStream` regardless of which path is used.
+</Note>
+
+---
+
+## Picture-in-Picture
+
+### `enterPictureInPicture()`
+
+```dart
+Future<bool> enterPictureInPicture()
+```
+
+Requests PiP immediately. Returns `true` if PiP was successfully entered. On Android, the player must be in fullscreen first. On iOS in texture mode, the tile is transparently swapped to a platform view before entering PiP.
+
+### `isPictureInPictureAvailable()`
+
+```dart
+Future<bool> isPictureInPictureAvailable()
+```
+
+Returns `true` if PiP can be entered right now. Respects `allowsPictureInPicture`. On Android, also requires the player to be in fullscreen.
+
+### `getPictureInPictureStatus()`
+
+```dart
+Future<bool> getPictureInPictureStatus()
+```
+
+Ground-truth PiP status. On Android, queries `isInPictureInPictureMode` directly (the `isPipEnabled` property is poll-driven on Android and may be stale at lifecycle-transition time).
+
+### `enableAutomaticInlinePip()` / `disableAutomaticInlinePip()`
+
+```dart
+Future<bool> enableAutomaticInlinePip()
+Future<bool> disableAutomaticInlinePip()
+```
+
+Enables or disables the automatic PiP-on-background behaviour at runtime.
+
+---
+
+## Subtitles
+
+### `getAvailableSubtitleTracks()`
+
+```dart
+Future<List<NativeVideoPlayerSubtitleTrack>> getAvailableSubtitleTracks()
+```
+
+Returns all subtitle tracks — both tracks embedded in the media and any sidecar (external VTT/SRT) sources — distinguished by `NativeVideoPlayerSubtitleTrack.source`. On Android, URL sidecar tracks that were natively sideloaded are de-duplicated so each track appears only once.
+
+### `setSubtitleTrack()`
+
+```dart
+Future<void> setSubtitleTrack(NativeVideoPlayerSubtitleTrack track)
+```
+
+Activates a subtitle track. Works for both embedded tracks and sidecar tracks. Pass `NativeVideoPlayerSubtitleTrack.off()` to disable subtitles.
+
+### `setSidecarSubtitles()`
+
+```dart
+Future<void> setSidecarSubtitles(List<NativeVideoPlayerSidecarSubtitle> sources)
+```
+
+Replaces the set of available external subtitle sources at runtime. Selection resets to off; call `setSubtitleTrack()` with one of the returned sidecar entries to activate one. On Android, URL sources are also natively attached so captions remain visible during PiP and native fullscreen.
+
+### `setNativeSubtitleTextScale()`
+
+```dart
+Future<void> setNativeSubtitleTextScale(double scale)
+```
+
+Scales the text size of **embedded** (platform-rendered) subtitle tracks. `1.0` = platform default (respects the user's system caption size preference). Has no effect on sidecar overlay captions — use `NativeVideoPlayerSubtitleStyle.fontSize` for those.
+
+### `setSubtitleStyle()`
+
+```dart
+void setSubtitleStyle(NativeVideoPlayerSubtitleStyle style)
+```
+
+Updates the visual style of the sidecar subtitle overlay (font, colors, alignment, padding). Changes take effect on the next frame. Also pushes `embeddedTextScale` to the platform caption renderer when it changes.
+
+---
+
+## Audio tracks
+
+### `getAvailableAudioTracks()`
+
+```dart
+Future<List<NativeVideoPlayerAudioTrack>> getAvailableAudioTracks()
+```
+
+Returns the list of alternate audio tracks (multiple languages, audio description, commentary). Returns an empty list for single-audio content.
+
+### `setAudioTrack()`
+
+```dart
+Future<void> setAudioTrack(NativeVideoPlayerAudioTrack track)
+```
+
+Selects an alternate audio track. Control listeners receive a `PlayerControlState.audioTrackChanged` event.
+
+---
+
+## Quality
+
+<ParamField path="qualities" type="List<NativeVideoPlayerQuality>">
+  Read-only property. The HLS quality variants available for the current source, populated after `load()` completes. Each entry has `label`, `url`, `bitrate`, `width`, `height`, and `isAuto`.
+</ParamField>
+
+### `setQuality()`
+
+```dart
+Future<void> setQuality(NativeVideoPlayerQuality quality)
+```
+
+Forces a specific HLS quality variant. Use `NativeVideoPlayerQuality.auto()` to return to adaptive bitrate selection.
+
+```dart
+final tracks = controller.qualities;
+// Select the highest quality
+await controller.setQuality(tracks.first);
+// Return to auto
+await controller.setQuality(NativeVideoPlayerQuality.auto());
+```
+
+---
+
+## Event listeners
+
+Listeners are notified with the current state immediately upon registration (if the player is already initialized). Remove listeners before the controller is disposed to avoid leaks.
+
+### Activity listeners
+
+```dart
+void addActivityListener(void Function(PlayerActivityEvent) listener)
+void removeActivityListener(void Function(PlayerActivityEvent) listener)
+```
+
+Receives `PlayerActivityEvent` objects whose `.state` is a `PlayerActivityState` value:
+
+| State | Description |
+|---|---|
+| `idle` | No media loaded |
+| `initializing` | Platform view being created |
+| `initialized` | Platform view ready |
+| `loading` | Media being loaded |
+| `loaded` | Media ready; `duration` is now set |
+| `playing` | Playback in progress |
+| `paused` | Playback paused |
+| `buffering` | Stalled waiting for data (debounced 400 ms) |
+| `completed` | Video reached its end |
+| `stopped` | Playback stopped |
+| `error` | Playback failed; `data['message']` contains the reason |
+
+### Control listeners
+
+```dart
+void addControlListener(void Function(PlayerControlEvent) listener)
+void removeControlListener(void Function(PlayerControlEvent) listener)
+```
+
+Receives `PlayerControlEvent` objects whose `.state` is a `PlayerControlState` value: `timeUpdated`, `qualityChanged`, `speedChanged`, `seeked`, `pipStarted`, `pipStopped`, `pipAvailabilityChanged`, `fullscreenEntered`, `fullscreenExited`, `subtitleTrackChanged`, `audioTrackChanged`, `airPlayConnected`, `airPlayDisconnected`.
+
+### AirPlay listeners (iOS)
+
+```dart
+void addAirPlayAvailabilityListener(void Function(bool isAvailable) listener)
+void removeAirPlayAvailabilityListener(void Function(bool) listener)
+
+void addAirPlayConnectionListener(void Function(bool isConnected) listener)
+void removeAirPlayConnectionListener(void Function(bool) listener)
+```
+
+AirPlay state is global — a single shared `AirPlayStateManager` broadcasts to all controllers. Listeners are notified immediately with the current state upon registration.
+
+---
+
+## Properties
+
+<ParamField path="id" type="int">Unique controller ID passed to the constructor.</ParamField>
+<ParamField path="autoPlay" type="bool">Whether auto-play is enabled.</ParamField>
+<ParamField path="mediaInfo" type="NativeVideoPlayerMediaInfo?">Now Playing metadata.</ParamField>
+<ParamField path="allowsPictureInPicture" type="bool">Whether PiP is permitted.</ParamField>
+<ParamField path="currentPosition" type="Duration">Current playback position.</ParamField>
+<ParamField path="duration" type="Duration">Total video duration. `Duration.zero` until loaded.</ParamField>
+<ParamField path="bufferedPosition" type="Duration">How far the video has been buffered ahead.</ParamField>
+<ParamField path="volume" type="double">Current volume (`0.0`–`1.0`).</ParamField>
+<ParamField path="speed" type="double">Current playback rate.</ParamField>
+<ParamField path="activityState" type="PlayerActivityState">Latest activity state.</ParamField>
+<ParamField path="controlState" type="PlayerControlState">Latest control state.</ParamField>
+<ParamField path="url" type="String?">URL passed to the most recent `load*()` call, or `null` if never loaded.</ParamField>
+<ParamField path="isFullScreen" type="bool">Whether the player is currently fullscreen.</ParamField>
+<ParamField path="isPipEnabled" type="bool">Whether PiP is currently active.</ParamField>
+<ParamField path="isPipAvailable" type="bool">Whether PiP can be entered right now.</ParamField>
+<ParamField path="isAirplayAvailable" type="bool">Global flag — AirPlay routes are present (iOS only).</ParamField>
+<ParamField path="isAirplayConnected" type="bool">Global flag — video is routing to an AirPlay device.</ParamField>
+<ParamField path="isAirplayConnecting" type="bool">Global flag — a connection attempt is in progress.</ParamField>
+<ParamField path="airPlayDeviceName" type="String?">Name of the connected AirPlay device, or `null`.</ParamField>
+<ParamField path="playbackRange" type="NativeVideoPlayerPlaybackRange?">Active A–B range, or `null` when unrestricted.</ParamField>
+<ParamField path="qualities" type="List<NativeVideoPlayerQuality>">Available HLS quality variants.</ParamField>
+<ParamField path="isInitialized" type="bool">Whether the platform view is ready.</ParamField>
+<ParamField path="activeSidecarCueLines" type="ValueListenable<List<String>>">Active sidecar subtitle cue text at the current position.</ParamField>
+<ParamField path="hasSidecarSubtitleSelected" type="bool">Whether a sidecar track is currently selected.</ParamField>
+
+---
+
+## Streams
+
+All streams are broadcast streams — multiple listeners are allowed. They replay the current value immediately to each new subscriber.
+
+<ParamField path="positionStream" type="Stream<Duration>">
+  Emits the current playback position at the interval configured by `NativeVideoPlayerConfig.timeUpdateInterval` (default 500 ms).
+</ParamField>
+
+<ParamField path="durationStream" type="Stream<Duration>">
+  Emits the total video duration. Fires when duration becomes known (on `loaded`) and on any subsequent change.
+</ParamField>
+
+<ParamField path="bufferedPositionStream" type="Stream<Duration>">
+  Emits the leading edge of the download buffer.
+</ParamField>
+
+<ParamField path="playerStateStream" type="Stream<PlayerActivityState>">
+  Emits a `PlayerActivityState` value on every activity transition.
+</ParamField>
+
+<ParamField path="speedStream" type="Stream<double>">
+  Emits the new playback rate whenever it changes.
+</ParamField>
+
+<ParamField path="isPipEnabledStream" type="Stream<bool>">
+  Emits `true`/`false` as PiP starts and stops.
+</ParamField>
+
+<ParamField path="isPipAvailableStream" type="Stream<bool>">
+  Emits when the PiP-available status changes (e.g., player enters/exits fullscreen on Android).
+</ParamField>
+
+<ParamField path="isAirplayAvailableStream" type="Stream<bool>">
+  Global stream — emits when AirPlay routes appear or disappear.
+</ParamField>
+
+<ParamField path="isAirplayConnectedStream" type="Stream<bool>">
+  Global stream — emits `true` when connected to an AirPlay device.
+</ParamField>
+
+<ParamField path="isAirplayConnectingStream" type="Stream<bool>">
+  Global stream — emits `true` during an in-progress AirPlay connection attempt.
+</ParamField>
+
+<ParamField path="airPlayDeviceNameStream" type="Stream<String?>">
+  Global stream — emits the AirPlay device name on connect and `null` on disconnect.
+</ParamField>
+
+<ParamField path="isFullscreenStream" type="Stream<bool>">
+  Emits `true` when entering fullscreen and `false` when exiting.
+</ParamField>
+
+<ParamField path="qualityChangedStream" type="Stream<NativeVideoPlayerQuality>">
+  Emits the newly selected quality whenever ABR or a manual `setQuality()` call changes the active variant.
+</ParamField>
+
+<ParamField path="qualitiesStream" type="Stream<List<NativeVideoPlayerQuality>>">
+  Emits the complete list of available qualities whenever it is refreshed (initially after load, and after ABR updates the list).
+</ParamField>
+
+---
+
+## Overlay helpers
+
+### `lockOverlay()` / `unlockOverlay()`
+
+```dart
+void lockOverlay()
+void unlockOverlay()
+```
+
+Locks the custom controls overlay so it stays permanently visible (useful for live streams or interactive content). Call `unlockOverlay()` to restore the normal tap-to-toggle, auto-hide-after-3s behaviour.
+
+### `emitCurrentStateToAllListeners()`
+
+```dart
+void emitCurrentStateToAllListeners()
+```
+
+Broadcasts the current internal state to every registered listener and stream. Useful when dynamically adding listeners after initialization to ensure they receive the current values immediately.
+
+---
+
+## AirPlay helpers (iOS)
+
+### `isAirPlayAvailable()`
+
+```dart
+Future<bool> isAirPlayAvailable()
+```
+
+Queries the native side for current AirPlay route availability.
+
+### `showAirPlayPicker()`
+
+```dart
+Future<void> showAirPlayPicker()
+```
+
+Presents the native iOS AirPlay route-picker sheet.
+
+### `disconnectAirPlay()`
+
+```dart
+Future<void> disconnectAirPlay()
+```
+
+Stops sending video to the currently connected AirPlay device. Throws `StateError` if the player is not initialized and `PlatformException` if not connected.
+
+---
+
+## Complete example
+
+```dart
+class VideoScreen extends StatefulWidget {
+  const VideoScreen({super.key});
+
+  @override
+  State<VideoScreen> createState() => _VideoScreenState();
+}
+
+class _VideoScreenState extends State<VideoScreen> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: false,
+      lockToLandscape: true,
+    );
+
+    _controller.addActivityListener(_onActivity);
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    if (event.state == PlayerActivityState.loaded) {
+      _controller.play();
+    }
+    if (event.state == PlayerActivityState.error) {
+      debugPrint('Playback error: ${event.data?['message']}');
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeActivityListener(_onActivity);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: NativeVideoPlayer(
+        controller: _controller,
+        overlayBuilder: (context, controller) => MyCustomControls(controller),
+      ),
+    );
+  }
+}
+
+// Somewhere after the widget is built:
+await _controller.loadUrl(url: 'https://cdn.example.com/video.m3u8');
+```

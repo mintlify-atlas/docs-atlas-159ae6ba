@@ -1,0 +1,325 @@
+---
+title: "Playback Controls: Play, Pause, Seek, and Speed"
+sidebarTitle: "Controls"
+description: "Control native video playback in better_native_video_player: play, pause, seek to position, set volume (0-1), set playback speed (0.25x-2x), and toggle looping."
+---
+
+Once a video is loaded, `NativeVideoPlayerController` exposes a set of async methods for controlling every aspect of playback — from basic transport controls through volume, speed, A-B loop ranges, and Now Playing metadata for the lock screen. All methods communicate over a Flutter platform channel, so they return `Future`s that complete after the native layer has applied the change.
+
+## Transport Controls
+
+```dart
+// Start or resume playback
+await controller.play();
+
+// Pause at the current frame
+await controller.pause();
+
+// Seek to an absolute position
+await controller.seekTo(const Duration(seconds: 30));
+await controller.seekTo(const Duration(minutes: 2, seconds: 15));
+```
+
+`play()` is smart about native-layer evictions: if the iOS total-player LRU cap has torn down the underlying AVPlayer, it transparently re-loads the last source at the pre-eviction position before resuming.
+
+## Volume
+
+Volume is a `double` in the range `0.0` (silent) to `1.0` (device maximum). It applies to the player's audio output independently of the device's system volume.
+
+```dart
+await controller.setVolume(0.0);   // mute
+await controller.setVolume(0.5);   // 50 %
+await controller.setVolume(1.0);   // full (default)
+```
+
+Read the current volume synchronously from the `volume` property:
+
+```dart
+final double current = controller.volume; // 0.0 – 1.0
+```
+
+## Playback Speed
+
+Speed can range from `0.25x` (quarter speed) to `2.0x` (double speed). Both platforms apply pitch-correction so audio does not chipmunk or distort.
+
+```dart
+await controller.setSpeed(0.5);   // half speed — great for review
+await controller.setSpeed(1.0);   // normal (default)
+await controller.setSpeed(1.25);  // slightly faster
+await controller.setSpeed(1.5);
+await controller.setSpeed(2.0);   // double speed
+```
+
+Listen to live speed changes with the dedicated stream:
+
+```dart
+controller.speedStream.listen((speed) {
+  print('Speed is now ${speed}x');
+});
+```
+
+## Looping
+
+Looping can be configured at construction time or changed dynamically. When enabled the player restarts seamlessly at the beginning with no stutter (ExoPlayer `REPEAT_MODE_ONE` on Android, automatic replay on iOS).
+
+```dart
+// At construction time
+final controller = NativeVideoPlayerController(
+  id: 1,
+  enableLooping: true,
+);
+
+// Dynamically during playback
+await controller.setLooping(true);   // enable
+await controller.setLooping(false);  // disable
+```
+
+<Note>
+  Disable looping when a `NativeVideoPlayerPlaylist` is attached; auto-advance relies on the `completed` event, which never fires while looping is active.
+</Note>
+
+## A-B Loop / Clip Ranges
+
+`setPlaybackRange` confines playback to a sub-range of the video, identified by a start and end `Duration`. By default the range loops; pass `loop: false` to pause once at the end instead.
+
+```dart
+// Loop a language-practice clip between 0:10 and 0:25
+await controller.setPlaybackRange(
+  start: const Duration(seconds: 10),
+  end: const Duration(seconds: 25),
+); // loop: true is the default
+
+// Play a clip once, then pause at the end
+await controller.setPlaybackRange(
+  start: const Duration(minutes: 1, seconds: 30),
+  end: const Duration(minutes: 2),
+  loop: false,
+);
+
+// Remove the range — playback is unrestricted again
+controller.clearPlaybackRange();
+```
+
+If the current position is outside the range when `setPlaybackRange` is called, the player seeks to `start` immediately. Loading a new video clears the range automatically.
+
+The active range is readable as a property:
+
+```dart
+final NativeVideoPlayerPlaybackRange? range = controller.playbackRange;
+if (range != null) {
+  print('Looping ${range.start} → ${range.end}, loop: ${range.loop}');
+}
+```
+
+<Tip>
+  Boundary precision follows the configured time-update interval (default 250 ms). For frame-accurate clips on iOS, consider using native `AVPlayerItem` trim points via a platform channel extension instead.
+</Tip>
+
+## Readable State Properties
+
+All playback state is available synchronously from the controller and is also exposed as broadcast streams for reactive UIs.
+
+<AccordionGroup>
+  <Accordion title="Synchronous properties">
+    ```dart
+    Duration position  = controller.currentPosition;
+    Duration duration  = controller.duration;
+    Duration buffered  = controller.bufferedPosition;
+    double   volume    = controller.volume;
+    double   speed     = controller.speed;
+    bool     fullscreen = controller.isFullScreen;
+    bool     pip        = controller.isPipEnabled;
+    String?  url        = controller.url;
+    NativeVideoPlayerPlaybackRange? range = controller.playbackRange;
+    PlayerActivityState activity = controller.activityState;
+    PlayerControlState  control  = controller.controlState;
+    List<NativeVideoPlayerQuality> qualities = controller.qualities;
+    ```
+  </Accordion>
+  <Accordion title="Individual streams">
+    ```dart
+    controller.positionStream.listen((Duration pos) { ... });
+    controller.durationStream.listen((Duration dur) { ... });
+    controller.bufferedPositionStream.listen((Duration buf) { ... });
+    controller.speedStream.listen((double spd) { ... });
+    controller.playerStateStream.listen((PlayerActivityState s) { ... });
+    controller.isFullscreenStream.listen((bool fs) { ... });
+    controller.isPipEnabledStream.listen((bool pip) { ... });
+    controller.qualityChangedStream.listen((NativeVideoPlayerQuality q) { ... });
+    controller.qualitiesStream.listen((List<NativeVideoPlayerQuality> qs) { ... });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Now Playing / Lock Screen Metadata
+
+Supply `NativeVideoPlayerMediaInfo` at controller construction to populate the Control Center on iOS and the lock-screen media notification on Android.
+
+```dart
+final controller = NativeVideoPlayerController(
+  id: 1,
+  mediaInfo: const NativeVideoPlayerMediaInfo(
+    title: 'Lesson 3 — Advanced Flutter',
+    subtitle: 'Flutter Academy',
+    album: 'Flutter Course 2024',
+    artworkUrl: 'https://cdn.example.com/course-art.jpg',
+  ),
+);
+```
+
+`NativeVideoPlayerMediaInfo` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | `String?` | Track title shown in the media session |
+| `subtitle` | `String?` | Artist or channel name |
+| `album` | `String?` | Album or series name |
+| `artworkUrl` | `String?` | HTTPS URL to cover art image |
+
+## Scrub-Preview Storyboards
+
+Show thumbnail previews as the user drags the scrubber. `StoryboardThumbnails` parses WebVTT storyboards or uniform sprite-sheet grids and returns the correct thumbnail for any playback position.
+
+<Tabs>
+  <Tab title="WebVTT storyboard">
+    ```dart
+    // Parse directly from inline content
+    final board = StoryboardThumbnails.parseVtt(
+      vttContent,
+      baseUrl: Uri.parse('https://cdn.example.com/storyboard.vtt'),
+    );
+
+    // Or fetch and parse from a URL
+    final board = await StoryboardThumbnails.fromUrl(
+      'https://cdn.example.com/storyboard.vtt',
+    );
+
+    // Look up the thumbnail at the scrubber position
+    final StoryboardThumbnail? thumb = board.thumbnailAt(scrubPosition);
+    if (thumb != null) {
+      // thumb.url    — image URL (already resolved against base URL)
+      // thumb.region — Rect? crop inside a sprite sheet (null = whole image)
+      Image.network(thumb.url);
+    }
+    ```
+  </Tab>
+  <Tab title="Uniform sprite grid">
+    ```dart
+    // Vimeo thumb_preview / Bunny Stream seek sheets
+    final board = StoryboardThumbnails.fromUniformGrid(
+      spriteUrls: [
+        'https://cdn.example.com/sprites_0.webp',
+        'https://cdn.example.com/sprites_1.webp',
+      ],
+      frameInterval: const Duration(seconds: 5),
+      columns: 10,
+      frameWidth: 426,
+      frameHeight: 240,
+      framesPerSprite: 120,
+      totalFrames: 234, // optional — caps the count for the last partial sheet
+    );
+
+    final thumb = board.thumbnailAt(scrubPosition);
+    // Use thumb.url + thumb.region to ClipRect the correct tile
+    ```
+  </Tab>
+</Tabs>
+
+`StoryboardThumbnail` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `start` | `Duration` | Cue start time |
+| `end` | `Duration` | Cue end time |
+| `url` | `String` | Image URL, resolved against the storyboard base URL |
+| `region` | `Rect?` | Sprite-sheet crop rectangle; `null` when the image is the whole thumbnail |
+
+The `thumbnailAt(position)` method uses binary search and returns the nearest earlier entry, so scrub bars with gaps in the storyboard still show the last known thumbnail.
+
+## Building a Custom Playback Bar
+
+The example below combines several control methods into a typical scrubber + transport bar:
+
+```dart
+class PlaybackBar extends StatefulWidget {
+  final NativeVideoPlayerController controller;
+  const PlaybackBar({required this.controller, super.key});
+  @override
+  State<PlaybackBar> createState() => _PlaybackBarState();
+}
+
+class _PlaybackBarState extends State<PlaybackBar> {
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  Duration _buffered = Duration.zero;
+  bool _playing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addControlListener(_onControl);
+    widget.controller.addActivityListener(_onActivity);
+  }
+
+  void _onControl(PlayerControlEvent e) {
+    if (e.state == PlayerControlState.timeUpdated && mounted) {
+      setState(() {
+        _position = widget.controller.currentPosition;
+        _duration = widget.controller.duration;
+        _buffered = widget.controller.bufferedPosition;
+      });
+    }
+  }
+
+  void _onActivity(PlayerActivityEvent e) {
+    if (mounted) setState(() => _playing = e.state == PlayerActivityState.playing);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final max = _duration.inMilliseconds.toDouble();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Slider(
+          value: _position.inMilliseconds.toDouble().clamp(0, max),
+          secondaryTrackValue: _buffered.inMilliseconds.toDouble().clamp(0, max),
+          min: 0,
+          max: max > 0 ? max : 1,
+          onChanged: (v) => widget.controller.seekTo(
+            Duration(milliseconds: v.toInt()),
+          ),
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
+              onPressed: _playing
+                  ? widget.controller.pause
+                  : widget.controller.play,
+            ),
+            DropdownButton<double>(
+              value: widget.controller.speed,
+              items: [0.5, 1.0, 1.25, 1.5, 2.0]
+                  .map((s) => DropdownMenuItem(
+                        value: s,
+                        child: Text('${s}x'),
+                      ))
+                  .toList(),
+              onChanged: (s) => widget.controller.setSpeed(s ?? 1.0),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeControlListener(_onControl);
+    widget.controller.removeActivityListener(_onActivity);
+    super.dispose();
+  }
+}
+```

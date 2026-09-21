@@ -1,0 +1,262 @@
+---
+title: "NativeVideoPlayer Widget: Embed Video in Flutter"
+sidebarTitle: "Widget"
+description: "NativeVideoPlayer embeds native video in Flutter with tap-to-toggle overlay controls, an auto-hide timer, and fully styleable sidecar subtitle rendering."
+---
+
+`NativeVideoPlayer` is the Flutter widget that embeds the native video surface — a `UiKitView` backed by `AVPlayerViewController` on iOS and a `PlatformViewLink` backed by ExoPlayer's `PlayerView` on Android — directly into your widget tree. You hand it a `NativeVideoPlayerController` and the widget takes care of creating the platform view, registering it with the controller, and wiring up the overlay and subtitle layers on top. Everything from your widget tree that sits above the video surface — controls, progress bars, title cards — belongs in the `overlayBuilder`.
+
+## Widget parameters
+
+<ParamField path="controller" type="NativeVideoPlayerController" required>
+  The controller that drives this video surface. Every `NativeVideoPlayer` that shares a controller `id` renders the same native player; the most-recently created view receives platform channel commands.
+</ParamField>
+
+<ParamField path="overlayBuilder" type="Widget Function(BuildContext, NativeVideoPlayerController)?">
+  A builder called every time the overlay needs to be rebuilt. Receives the current `BuildContext` and the bound `NativeVideoPlayerController`. When this is non-`null`, native player controls are automatically hidden so your overlay is the sole UI layer. The overlay fades in and out with tap-to-toggle behavior and a 3-second auto-hide timer.
+</ParamField>
+
+<ParamField path="overlayFadeDuration" type="Duration" default="Duration(milliseconds: 300)">
+  Duration for the overlay fade-in and fade-out animations. Increase this for a slower, more cinematic feel or decrease it for a snappy response.
+</ParamField>
+
+<ParamField path="isFullscreenContext" type="bool" default="false">
+  Set to `true` **only** when building the `NativeVideoPlayer` inside a Dart fullscreen dialog. This tells the native side to allocate a dedicated fullscreen view (iOS: a separate `AVPlayerViewController`; Android: no-op) and prevents the shared inline view from being moved away from the list/detail slot. Leave this at its default `false` for all inline players.
+</ParamField>
+
+<ParamField path="subtitleStyle" type="NativeVideoPlayerSubtitleStyle" default="NativeVideoPlayerSubtitleStyle()">
+  Visual style applied to sidecar (external VTT/SRT) subtitles rendered by the plugin's Flutter subtitle overlay. Supports `fontSize`, `textColor`, `backgroundColor`, `fontWeight`, `alignment`, `padding`, and separate properties for fullscreen-landscape overrides. Embedded native tracks (HLS CEA-608/WebVTT) use the platform caption settings; only their scale can be changed via `setNativeSubtitleTextScale()`.
+</ParamField>
+
+## Basic usage
+
+The minimal setup is just the widget and its controller — no overlay, native controls visible:
+
+```dart
+import 'package:better_native_video_player/better_native_video_player.dart';
+
+NativeVideoPlayer(
+  controller: _controller,
+)
+```
+
+For most production use cases you will also want to size the widget explicitly or let it fill its parent:
+
+```dart
+SizedBox(
+  height: 240,
+  child: NativeVideoPlayer(
+    controller: _controller,
+  ),
+)
+```
+
+## Custom overlay controls
+
+Pass an `overlayBuilder` to render your own controls on top of the video. The widget automatically:
+
+- Hides native platform controls when the builder is non-`null`.
+- Shows the overlay immediately when the widget mounts.
+- Starts a 3-second auto-hide timer and fades the overlay out.
+- Shows the overlay again when the user taps anywhere on the video.
+- Passes tap events through to interactive controls (buttons, sliders) without triggering the toggle.
+
+```dart
+NativeVideoPlayer(
+  controller: _controller,
+  overlayFadeDuration: const Duration(milliseconds: 250),
+  overlayBuilder: (context, controller) {
+    return _PlaybackOverlay(controller: controller);
+  },
+)
+```
+
+A minimal stateful overlay that reacts to playback state:
+
+```dart
+class _PlaybackOverlay extends StatefulWidget {
+  final NativeVideoPlayerController controller;
+  const _PlaybackOverlay({required this.controller});
+
+  @override
+  State<_PlaybackOverlay> createState() => _PlaybackOverlayState();
+}
+
+class _PlaybackOverlayState extends State<_PlaybackOverlay> {
+  PlayerActivityState _state = PlayerActivityState.idle;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addActivityListener(_onActivity);
+    widget.controller.addControlListener(_onControl);
+    // Seed initial values from the controller's current state
+    _state = widget.controller.activityState;
+    _position = widget.controller.currentPosition;
+    _duration = widget.controller.duration;
+  }
+
+  void _onActivity(PlayerActivityEvent event) {
+    if (mounted) setState(() => _state = event.state);
+  }
+
+  void _onControl(PlayerControlEvent event) {
+    if (!mounted) return;
+    if (event.state == PlayerControlState.timeUpdated) {
+      setState(() {
+        _position = widget.controller.currentPosition;
+        _duration = widget.controller.duration;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeActivityListener(_onActivity);
+    widget.controller.removeControlListener(_onControl);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // Semi-transparent gradient so controls are legible
+        const Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.black54, Colors.transparent, Colors.black54],
+              ),
+            ),
+          ),
+        ),
+
+        // Central play / pause button
+        Center(
+          child: IconButton(
+            iconSize: 56,
+            icon: Icon(
+              _state.isPlaying ? Icons.pause_circle : Icons.play_circle,
+              color: Colors.white,
+            ),
+            onPressed: () {
+              _state.isPlaying
+                  ? widget.controller.pause()
+                  : widget.controller.play();
+            },
+          ),
+        ),
+
+        // Bottom progress bar
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: Slider(
+            value: _duration.inMilliseconds > 0
+                ? _position.inMilliseconds / _duration.inMilliseconds
+                : 0.0,
+            onChanged: (v) => widget.controller.seekTo(
+              Duration(
+                milliseconds: (v * _duration.inMilliseconds).round(),
+              ),
+            ),
+          ),
+        ),
+
+        // Fullscreen toggle
+        Positioned(
+          top: 8,
+          right: 8,
+          child: IconButton(
+            icon: Icon(
+              widget.controller.isFullScreen
+                  ? Icons.fullscreen_exit
+                  : Icons.fullscreen,
+              color: Colors.white,
+            ),
+            onPressed: () => widget.controller.toggleFullScreen(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+```
+
+<Tip>
+  Call `controller.lockOverlay()` to keep the overlay permanently visible — useful for live streams or interactive content — and `controller.unlockOverlay()` to restore the auto-hide behaviour. Both methods work at any time and are reflected instantly in the currently mounted widget.
+</Tip>
+
+## Sidecar subtitle styling
+
+When you load external VTT or SRT subtitle files, the plugin renders them in a Flutter overlay positioned above the video but below the controls. Pass a `NativeVideoPlayerSubtitleStyle` to control every aspect of that rendering:
+
+```dart
+NativeVideoPlayer(
+  controller: _controller,
+  subtitleStyle: const NativeVideoPlayerSubtitleStyle(
+    fontSize: 20,
+    textColor: Colors.white,
+    backgroundColor: Colors.black54,
+    fontWeight: FontWeight.bold,
+    alignment: Alignment.bottomCenter,
+    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+    // Optional: different size in fullscreen landscape
+    fullscreenLandscapeFontSize: 26,
+  ),
+)
+```
+
+The style is forwarded to the controller so the Dart fullscreen dialog can mirror it exactly. Rebuilding the `NativeVideoPlayer` widget with a different `subtitleStyle` updates the rendering live without touching the native player.
+
+<Note>
+  `subtitleStyle` only affects **sidecar** (externally loaded) subtitle tracks. Embedded HLS/native subtitle tracks are rendered by the platform caption engine. To scale their text size, call `controller.setNativeSubtitleTextScale(1.5)` instead.
+</Note>
+
+## The `isFullscreenContext` flag
+
+The `isFullscreenContext` flag is handled automatically by the plugin when it opens the Dart fullscreen dialog — you should **never** pass `true` for an inline player:
+
+```dart
+// ✅ Correct — inline player
+NativeVideoPlayer(
+  controller: _controller,
+  overlayBuilder: (ctx, ctrl) => MyOverlay(controller: ctrl),
+)
+
+// ❌ Wrong — never set this manually on an inline player
+NativeVideoPlayer(
+  controller: _controller,
+  isFullscreenContext: true, // reserved for the fullscreen dialog host
+)
+```
+
+The plugin passes `isFullscreenContext: true` internally when it constructs the fullscreen `NativeVideoPlayer` inside the dialog launched by `controller.enterFullScreen()`.
+
+## Widget identity and rebuilds
+
+<Tip>
+  The native platform view is created **once** per widget state and cached internally. Calling `setState()` in a parent widget — for example, to toggle overlay visibility — does **not** destroy and recreate the native player. The video continues playing without interruption across any number of Flutter rebuilds.
+</Tip>
+
+If you do need the widget to use a fresh native view (for example, after navigating back from a detail screen), simply unmount the old `NativeVideoPlayer` and mount a new one. The controller reconnects the native surface automatically when the new view is registered via `onPlatformViewCreated`. Use a stable `key` on the widget to control when Flutter considers it the same instance versus a new one:
+
+```dart
+// Same key → same platform view, same playback session
+NativeVideoPlayer(
+  key: const ValueKey('main-player'),
+  controller: _controller,
+)
+
+// Different key → new platform view, controller reconnects
+NativeVideoPlayer(
+  key: ValueKey('player-$videoId'),
+  controller: _controller,
+)
+```

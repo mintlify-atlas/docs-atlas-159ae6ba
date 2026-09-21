@@ -1,0 +1,205 @@
+---
+title: "Fullscreen Playback: Native and Dart Modes"
+sidebarTitle: "Fullscreen"
+description: "Enter native or Dart fullscreen in better_native_video_player. Control orientation, swipe-to-dismiss, and overlay visibility across both fullscreen modes."
+---
+
+`better_native_video_player` supports two distinct fullscreen strategies: **native fullscreen**, which hands playback off to the platform's own fullscreen presentation, and **Dart fullscreen**, which pushes a new Flutter route containing a second `NativeVideoPlayer` widget. The right choice depends on whether you have custom overlay controls — native fullscreen is simpler to set up while Dart fullscreen is required for custom overlays, Android PiP, and texture-rendered tiles.
+
+## Two Fullscreen Approaches
+
+<CardGroup cols={2}>
+  <Card title="Native Fullscreen" icon="mobile">
+    Platform-native presentation. On iOS, `AVPlayerViewController` expands to cover the screen. On Android, a `Dialog` is shown. No Flutter route is pushed; the native controls (if any) manage dismissal.
+  </Card>
+  <Card title="Dart Fullscreen" icon="code">
+    A new Flutter route is pushed via `Navigator`. The same controller drives a second `NativeVideoPlayer` widget, forwarding your `overlayBuilder` and `subtitleStyle`. Swipe-down-to-dismiss is built in.
+  </Card>
+</CardGroup>
+
+The controller chooses the path automatically:
+
+- **Dart fullscreen** is used when an `overlayBuilder` is attached to the `NativeVideoPlayer` widget, or when the active tile is texture-rendered (`iosTextureMode` / `androidTextureMode`).
+- **Native fullscreen** is used when there is no custom overlay and the tile is a standard platform view.
+
+## Fullscreen Methods
+
+All three methods work the same way regardless of which fullscreen mode is in use:
+
+```dart
+// Enter fullscreen
+await controller.enterFullScreen();
+
+// Exit fullscreen
+await controller.exitFullScreen();
+
+// Toggle
+await controller.toggleFullScreen();
+
+// Read the current state synchronously
+print(controller.isFullScreen);
+
+// Or listen reactively
+controller.isFullscreenStream.listen((isFullscreen) {
+  print('Fullscreen: $isFullscreen');
+});
+```
+
+Control events are also emitted:
+
+```dart
+controller.addControlListener((event) {
+  if (event.state == PlayerControlState.fullscreenEntered) {
+    print('Entered fullscreen');
+  }
+  if (event.state == PlayerControlState.fullscreenExited) {
+    print('Exited fullscreen');
+  }
+});
+```
+
+## Orientation and Lock-to-Landscape
+
+By default, entering fullscreen locks the device to landscape. Control this with the `lockToLandscape` constructor parameter:
+
+```dart
+final controller = NativeVideoPlayerController(
+  id: 1,
+  lockToLandscape: true, // default — landscape only in fullscreen
+);
+```
+
+Set it to `false` to allow all orientations in fullscreen, which is useful for portrait-format videos.
+
+### Restoring Orientation on Exit
+
+`FullscreenManager` automatically saves the app's orientation preferences before entering fullscreen and restores them on exit. To ensure your preferred orientations are remembered correctly, call `FullscreenManager.setPreferredOrientations()` instead of `SystemChrome.setPreferredOrientations()` directly, **or** pass them to the controller constructor:
+
+```dart
+// Via constructor — called once, remembered across fullscreen sessions
+final controller = NativeVideoPlayerController(
+  id: 1,
+  preferredOrientations: [DeviceOrientation.portraitUp],
+);
+
+// Or imperatively at any time before entering fullscreen
+await FullscreenManager.setPreferredOrientations([
+  DeviceOrientation.portraitUp,
+]);
+```
+
+When `exitFullscreen()` is called, `FullscreenManager` restores whichever orientations were active just before the fullscreen transition — not a hard-coded default.
+
+## Swipe-to-Dismiss
+
+In Dart fullscreen mode, a built-in `SwipeDownDismissible` wrapper is added to the fullscreen route when a custom overlay is present. A downward swipe gesture dismisses the fullscreen player and returns to the inline view. No extra dependency or configuration is required.
+
+If you want to prevent accidental swipe-to-dismiss on the **native iOS** fullscreen, use `preventFullscreenSwipeDismiss`:
+
+```dart
+final controller = NativeVideoPlayerController(
+  id: 1,
+  preventFullscreenSwipeDismiss: true, // default: true
+);
+```
+
+<Note>
+`preventFullscreenSwipeDismiss` only affects `AVPlayerViewController`'s internal swipe gesture on iOS native fullscreen. It has no effect on Android or on Dart-mode fullscreen (which has its own swipe-down-to-dismiss).
+</Note>
+
+## The `isFullscreenContext` Parameter
+
+When the plugin opens Dart fullscreen, it builds an inner `NativeVideoPlayer` for the fullscreen route and passes `isFullscreenContext: true`. This flag tells the widget it is operating in a fullscreen host and adjusts surface registration accordingly. You will not need to set it yourself unless you are building a custom fullscreen route:
+
+```dart
+// Normal inline usage — omit isFullscreenContext
+NativeVideoPlayer(
+  controller: controller,
+  overlayBuilder: (context, ctrl) => MyOverlay(controller: ctrl),
+)
+
+// Custom fullscreen host — set isFullscreenContext: true
+NativeVideoPlayer(
+  controller: controller,
+  overlayBuilder: (context, ctrl) => MyOverlay(controller: ctrl),
+  isFullscreenContext: true,
+)
+```
+
+## Complete Example: Toggle Fullscreen Button
+
+```dart
+class VideoWithFullscreen extends StatefulWidget {
+  const VideoWithFullscreen({super.key});
+
+  @override
+  State<VideoWithFullscreen> createState() => _VideoWithFullscreenState();
+}
+
+class _VideoWithFullscreenState extends State<VideoWithFullscreen> {
+  late final NativeVideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = NativeVideoPlayerController(
+      id: 1,
+      autoPlay: true,
+      showNativeControls: false,
+      lockToLandscape: true,
+      preferredOrientations: [DeviceOrientation.portraitUp],
+    );
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _controller.initialize();
+    await _controller.load(
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Fullscreen Demo')),
+      body: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: NativeVideoPlayer(
+          controller: _controller,
+          overlayBuilder: (context, controller) {
+            return StreamBuilder<bool>(
+              stream: controller.isFullscreenStream,
+              initialData: controller.isFullScreen,
+              builder: (context, snapshot) {
+                final isFullscreen = snapshot.data ?? false;
+                return Align(
+                  alignment: Alignment.bottomRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: IconButton(
+                      icon: Icon(
+                        isFullscreen
+                            ? Icons.fullscreen_exit
+                            : Icons.fullscreen,
+                        color: Colors.white,
+                      ),
+                      onPressed: () => controller.toggleFullScreen(),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+```
