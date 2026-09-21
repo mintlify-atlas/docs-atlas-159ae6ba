@@ -1,7 +1,7 @@
 ---
-title: "Playback Controls: Play, Pause, Seek, and Speed"
+title: "Playback Controls: Play, Pause, Seek, Speed, and Loops"
 sidebarTitle: "Controls"
-description: "Control native video playback in better_native_video_player: play, pause, seek to position, set volume (0-1), set playback speed (0.25x-2x), and toggle looping."
+description: "Control video playback in better_native_video_player: play, pause, seek, set volume and speed, loop with A-B ranges, and display scrub-preview storyboards."
 ---
 
 Once a video is loaded, `NativeVideoPlayerController` exposes a set of async methods for controlling every aspect of playback — from basic transport controls through volume, speed, A-B loop ranges, and Now Playing metadata for the lock screen. All methods communicate over a Flutter platform channel, so they return `Future`s that complete after the native layer has applied the change.

@@ -1,5 +1,5 @@
 ---
-title: "iOS and Android Platform Configuration Guide"
+title: "iOS and Android Setup for better_native_video_player"
 sidebarTitle: "Platform Setup"
 description: "Configure Info.plist on iOS and AndroidManifest.xml on Android to enable video playback, Picture-in-Picture, background audio, and Chromecast discovery."
 ---
@@ -33,7 +33,7 @@ Without this entry, AVFoundation will refuse to load plain HTTP (non-HTTPS) URLs
 
 **Background audio and Picture-in-Picture**
 
-Both the `audio` and `picture-in-picture` strings are required. `audio` alone enables background audio and AirPlay; adding `picture-in-picture` additionally enables automatic PiP when the app moves to the background (iOS 14.2+).
+The `audio` string is **required** for background audio and AirPlay. Adding `picture-in-picture` is **optional but recommended** — it enables automatic PiP when the app moves to the background (iOS 14.2+).
 
 ```xml
 <key>UIBackgroundModes</key>
@@ -176,7 +176,7 @@ Android PiP is powered by the [`floating`](https://pub.dev/packages/floating) pa
 <Accordion title="PiP is not available on iOS">
   Check the following in order:
 
-  1. Both `audio` **and** `picture-in-picture` must be present in `UIBackgroundModes` (having only `audio` is not enough).
+  1. Both `audio` **and** `picture-in-picture` must be present in `UIBackgroundModes` for PiP to work (`audio` alone is not sufficient for PiP).
   2. Use `await controller.isPictureInPictureAvailable()` to confirm PiP is supported at runtime — simulators often return `false`.
   3. The device must be running iOS 14.0+ for manual PiP; automatic PiP on backgrounding requires iOS 14.2+.
   4. The video must be **playing** before `enterPictureInPicture()` is called.
@@ -193,9 +193,9 @@ Android PiP is powered by the [`floating`](https://pub.dev/packages/floating) pa
 </Accordion>
 
 <Accordion title="Background audio stops on iOS">
-  Background audio requires two things:
+  Background audio requires:
 
-  1. `UIBackgroundModes` must contain at least `audio` in `Info.plist`.
+  1. `UIBackgroundModes` must contain `audio` in `Info.plist` (the `picture-in-picture` entry is optional — it is only needed for PiP, not for background audio).
   2. In Xcode, **Target → Signing & Capabilities → Background Modes**, the checkbox **Audio, AirPlay, and Picture in Picture** must be checked.
 
   If Xcode shows the capability as unchecked, the entitlement may be missing even if `Info.plist` appears correct. Add the capability via Xcode to generate the entitlement file and then rebuild.

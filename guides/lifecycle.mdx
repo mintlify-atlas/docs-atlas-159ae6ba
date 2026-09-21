@@ -1,5 +1,5 @@
 ---
-title: "Controller Lifecycle and Resource Management"
+title: "Controller Lifecycle: dispose() vs releaseResources()"
 sidebarTitle: "Lifecycle"
 description: "Learn when to call dispose() for full teardown versus releaseResources() for temporary cleanup when sharing a NativeVideoPlayerController across screens."
 ---
@@ -16,7 +16,7 @@ Use `dispose()` when the player is genuinely finished — the user has navigated
 
 ### `releaseResources()` — Flutter-side teardown only
 
-`releaseResources()` pauses playback, exits fullscreen, cancels per-view event subscriptions, and clears all Flutter-side references (platform view IDs, BuildContexts, listener lists, overlay builders). It does **not** send a native dispose command, so the native player remains alive and holds its current position, loaded source, and buffered data.
+`releaseResources()` pauses playback, exits fullscreen, cancels per-view event subscriptions, and clears Flutter-side references (platform view IDs, BuildContexts, listener lists). The overlay builder is intentionally preserved so the reconnecting widget can restore it. `releaseResources()` does **not** send a native dispose command, so the native player remains alive and holds its current position, loaded source, and buffered data.
 
 Use `releaseResources()` when the Flutter screen is being destroyed but you intend to reuse the same controller `id` on another screen — the classic list → detail navigation.
 
@@ -71,7 +71,7 @@ Use `releaseResources()` when the Flutter screen is being destroyed but you inte
     Cancels the buffering-debounce timer and both stalled-playback watchdog timers.
   </Step>
   <Step title="Clear event handlers and platform view references">
-    Empties all activity, control, and AirPlay listener lists, clears platform view IDs and BuildContext references, and nulls the method channel reference.
+    Empties all activity, control, and AirPlay listener lists, clears platform view IDs and BuildContext references, and nulls the method channel reference. The overlay builder and player state are preserved so the next registered platform view reconnects seamlessly.
   </Step>
   <Step title="Preserve everything else">
     The native player, its position, the loaded URL, the player state, and all stream controllers are untouched. A new `NativeVideoPlayer` widget that registers with the same controller `id` will reconnect the native surface and the streams will resume emitting from their current values.

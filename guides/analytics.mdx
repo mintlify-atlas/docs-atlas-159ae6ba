@@ -1,7 +1,7 @@
 ---
-title: "Playback Analytics, Resume Positions, and Helpers"
+title: "Playback Analytics, Position Checkpoints, and Helpers"
 sidebarTitle: "Analytics"
-description: "Track quality-of-experience metrics with PlaybackAnalytics, persist resume positions with PositionCheckpoints, control background playback with BackgroundPlaybackGuard, and show scrub previews with StoryboardThumbnails."
+description: "Track playback QoE metrics, persist resume positions, guard background audio, and display scrub-bar thumbnails with the player's built-in helper classes."
 ---
 
 `better_native_video_player` ships several helper classes alongside the core player that cover common production requirements: quality-of-experience analytics, resume-position persistence, background-playback policy, and scrub-bar thumbnail previews. All helpers are lightweight Dart wrappers over the controller's existing event streams — they add no extra platform channels or native traffic, and each one follows the same composable, `dispose()`-on-teardown lifecycle.
@@ -300,6 +300,10 @@ class _BackgroundAwarePlayerScreenState
 `StoryboardThumbnails` provides scrub-bar thumbnail previews. It supports two source formats used across major video platforms: WebVTT storyboard files (Vimeo, Mux, JWPlayer, Roku) and uniform sprite-sheet grids without a VTT index (Vimeo's `thumb_preview`, Bunny Stream's `seek/_N.jpg`). Both are resolved to the same list of `StoryboardThumbnail` entries that map a playback position to an image URL and an optional crop rectangle.
 
 ### StoryboardThumbnails.fromUrl()
+
+```dart
+static Future<StoryboardThumbnails> fromUrl(String url)
+```
 
 Downloads and parses a storyboard VTT from a URL. Cue payloads are image URLs, optionally with a `#xywh=x,y,w,h` fragment that selects a tile inside a sprite sheet. Relative URLs are resolved against the VTT file's own URL, matching how browsers process the format.
 

@@ -1,10 +1,14 @@
 ---
-title: "DRM: FairPlay, Widevine, AES-128, and ClearKey"
+title: "DRM Playback: FairPlay, Widevine, AES-128, ClearKey"
 sidebarTitle: "DRM"
-description: "Configure DRM-protected video in better_native_video_player. Supports FairPlay Streaming on iOS, Widevine on Android, AES-128 HLS encryption, and ClearKey for testing."
+description: "Configure DRM-protected video in better_native_video_player. Supports FairPlay on iOS, Widevine on Android, AES-128 HLS encryption, and ClearKey."
 ---
 
-`better_native_video_player` supports protected video playback through a unified `drmConfig` parameter on `load()`, `loadUrl()`, and `loadFile()`. The plugin delegates license handling to the native DRM frameworks — `AVFoundation` on iOS and ExoPlayer's DRM engine on Android — so no additional packages are required. Platform differences are abstracted away: you supply the right `type` value and the plugin takes care of the rest.
+`better_native_video_player` supports protected video playback through a unified `drmConfig` parameter on `load()` and `loadUrl()`. The plugin delegates license handling to the native DRM frameworks — `AVFoundation` on iOS and ExoPlayer's DRM engine on Android — so no additional packages are required. Platform differences are abstracted away: you supply the right `type` value and the plugin takes care of the rest.
+
+<Note>
+`drmConfig` is only available on `load()` and `loadUrl()` — the `loadFile()` method accepts only a `path` parameter and does not support DRM configuration. Local files loaded via `loadFile()` are expected to be unencrypted or pre-decrypted before being stored on device.
+</Note>
 
 ## Supported DRM Types
 
@@ -18,7 +22,7 @@ description: "Configure DRM-protected video in better_native_video_player. Suppo
 
 ## `drmConfig` Parameter
 
-Pass a `Map<String, dynamic>` to the `drmConfig` parameter of `load()`, `loadUrl()`, or `loadFile()`:
+Pass a `Map<String, dynamic>` to the `drmConfig` parameter of `load()` or `loadUrl()`:
 
 ```dart
 await controller.loadUrl(

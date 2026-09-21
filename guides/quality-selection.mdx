@@ -1,7 +1,7 @@
 ---
-title: "HLS Quality Selection and Adaptive Streaming"
+title: "HLS Quality Selection and Adaptive Bitrate Streaming"
 sidebarTitle: "Quality"
-description: "Select HLS quality variants manually or let better_native_video_player adapt automatically. Use viewport-based quality capping to save bandwidth in multi-player feeds."
+description: "Select HLS quality variants or let ABR auto-select in better_native_video_player. Cap quality per viewport size to cut bandwidth in multi-player feeds."
 ---
 
 HLS streams embed multiple quality variants (bitrate ladders) in the master manifest. `better_native_video_player` exposes those variants as `NativeVideoPlayerQuality` objects and lets you either let the native ABR engine choose automatically or lock to a specific variant manually. For feeds with many simultaneous players you can also cap each player's variant selection to its on-screen tile size, which dramatically reduces memory and bandwidth usage.

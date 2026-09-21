@@ -1,5 +1,5 @@
 ---
-title: "NativeVideoPlayer Widget: Embed Video in Flutter"
+title: "NativeVideoPlayer Widget: Embed Native Video in Flutter"
 sidebarTitle: "Widget"
 description: "NativeVideoPlayer embeds native video in Flutter with tap-to-toggle overlay controls, an auto-hide timer, and fully styleable sidecar subtitle rendering."
 ---
@@ -25,7 +25,7 @@ description: "NativeVideoPlayer embeds native video in Flutter with tap-to-toggl
 </ParamField>
 
 <ParamField path="subtitleStyle" type="NativeVideoPlayerSubtitleStyle" default="NativeVideoPlayerSubtitleStyle()">
-  Visual style applied to sidecar (external VTT/SRT) subtitles rendered by the plugin's Flutter subtitle overlay. Supports `fontSize`, `textColor`, `backgroundColor`, `fontWeight`, `alignment`, `padding`, and separate properties for fullscreen-landscape overrides. Embedded native tracks (HLS CEA-608/WebVTT) use the platform caption settings; only their scale can be changed via `setNativeSubtitleTextScale()`.
+  Visual style applied to sidecar (external VTT/SRT) subtitles rendered by the plugin's Flutter subtitle overlay. Supports `fontSize`, `fontWeight`, `fontStyle`, `fontFamily`, `lineHeight`, `textColor`, `backgroundColor`, `outlineColor`, `alignment`, `padding`, `textAlign`, fullscreen-landscape override variants, and `embeddedTextScale` (which scales platform-rendered embedded tracks). Embedded native tracks (HLS CEA-608/WebVTT) are otherwise styled by the platform caption settings.
 </ParamField>
 
 ## Basic usage

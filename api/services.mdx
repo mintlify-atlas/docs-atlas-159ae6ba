@@ -444,11 +444,11 @@ StreamBuilder<bool>(
 
 **Constructors and factories**
 
-| Factory / Constructor | Description |
-|-----------------------|-------------|
-| `StoryboardThumbnails.fromUrl(String url)` | Downloads and parses a storyboard VTT from `url`. Relative image URLs are resolved against the storyboard's own URL. |
-| `StoryboardThumbnails.parseVtt(String content, {Uri? baseUrl})` | Parses storyboard VTT content synchronously. |
-| `StoryboardThumbnails.fromUniformGrid({spriteUrls, frameInterval, columns, frameWidth, frameHeight, framesPerSprite, totalFrames?})` | Builds a storyboard from uniform sprite-sheet grids (Vimeo / Bunny Stream format — no VTT index needed). |
+| Method / Factory | Signature | Description |
+|------------------|-----------|-------------|
+| `StoryboardThumbnails.fromUrl` | `static Future<StoryboardThumbnails> fromUrl(String url)` | Downloads and parses a storyboard VTT from `url`. Relative image URLs are resolved against the storyboard's own URL. |
+| `StoryboardThumbnails.parseVtt` | `factory StoryboardThumbnails.parseVtt(String content, {Uri? baseUrl})` | Parses storyboard VTT content synchronously. |
+| `StoryboardThumbnails.fromUniformGrid` | `factory StoryboardThumbnails.fromUniformGrid({spriteUrls, frameInterval, columns, frameWidth, frameHeight, framesPerSprite, totalFrames?})` | Builds a storyboard from uniform sprite-sheet grids (Vimeo / Bunny Stream format — no VTT index needed). |
 
 **`fromUniformGrid` parameters**
 

@@ -1,7 +1,7 @@
 ---
 title: "Chromecast: Pure-Dart Device Discovery and Cast Session"
 sidebarTitle: "Chromecast"
-description: "Discover Chromecast devices and control playback with better_native_video_player's pure-Dart cast implementation. No Cast SDK required — uses mDNS and the Chromecast protocol."
+description: "Discover Chromecast devices and cast video using better_native_video_player's pure-Dart CASTV2 implementation. No Cast SDK or Google Services required."
 ---
 
 `better_native_video_player` ships a complete Chromecast implementation without the Cast SDK: device discovery uses system Bonjour on iOS and pure-Dart mDNS elsewhere, and the cast session speaks the CASTV2 protocol over TLS directly — no native dependencies, no hidden WebViews, and no Google Services requirement. The entire cast API lives in a dedicated entrypoint to avoid naming collisions with other cast-related packages.

@@ -1,7 +1,7 @@
 ---
-title: "Offline Video Downloads with Progress Tracking"
+title: "Offline Video Downloads with Progress and Index Persistence"
 sidebarTitle: "Offline Downloads"
-description: "Download videos for offline playback in better_native_video_player using VideoDownloadController with progress streams, persistent download index, cancel, and resume."
+description: "Offline video downloads for better_native_video_player: stream progress, persist a JSON index, play from local storage, and cancel or remove downloads."
 ---
 
 `VideoDownloadController` downloads progressive video files (MP4, WebM, and any single-file source) to device storage for fully offline playback. It streams progress updates as the file is written, persists a JSON download index that survives app restarts, and supports cancellation, removal, and resumable lookup by caller-supplied IDs. The plugin deliberately does not depend on `path_provider` — you supply the directory, so you control where files land.
@@ -72,7 +72,7 @@ final sub = downloads
 </ParamField>
 
 <ParamField path="fraction" type="double?">
-  Convenience getter: `receivedBytes / totalBytes` clamped to `0.0–1.0`, or `null` when `totalBytes` is unknown.
+  Computed getter: `receivedBytes / totalBytes` clamped to `0.0–1.0`, or `null` when `totalBytes` is `null`. Use this to drive a `LinearProgressIndicator`; show an indeterminate indicator when `null`.
 </ParamField>
 
 <ParamField path="error" type="String?">

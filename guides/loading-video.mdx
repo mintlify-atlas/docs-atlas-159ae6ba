@@ -1,10 +1,10 @@
 ---
-title: "Loading Videos: URLs, Files, Assets, and DRM"
+title: "Loading Videos: URLs, Local Files, and DRM Content"
 sidebarTitle: "Loading Video"
-description: "Load remote HLS streams, MP4 files, local device files, and Flutter asset videos into better_native_video_player. Covers startAt resume positions and custom HTTP headers."
+description: "Load HLS streams, MP4s, and local files using loadUrl, loadFile, or load. Covers HTTP headers, DRM configuration, and startAt native resume positions."
 ---
 
-The `NativeVideoPlayerController` exposes three load methods — `loadUrl`, `loadFile`, and the generic backward-compatible `load` — that each accept the full set of optional parameters like HTTP headers, DRM configuration, sidecar subtitles, and a native resume position. Every method routes through the same internal pipeline, so you can mix and match the style that reads most clearly in your codebase.
+The `NativeVideoPlayerController` exposes three load methods — `loadUrl`, `loadFile`, and the generic backward-compatible `load`. `loadUrl` and `load` accept optional HTTP headers, DRM configuration, sidecar subtitles, and a native resume position. `loadFile` is a focused helper that takes only a local file path and prepends `file://` automatically. All methods route through the same internal pipeline.
 
 ## Load Methods
 
@@ -206,7 +206,7 @@ await controller.loadUrl(
 
 ## DRM Configuration
 
-DRM is configured via a `Map<String, dynamic>` passed as `drmConfig`. The map shape is the same for `load`, `loadUrl`, and `loadFile`.
+DRM is configured via a `Map<String, dynamic>` passed as `drmConfig`. The map shape is the same for `load` and `loadUrl`. `loadFile` does not accept `drmConfig` — local files are not DRM-protected.
 
 | Parameter | Type | Required | Platform | Description |
 |-----------|------|:--------:|----------|-------------|

@@ -1,7 +1,7 @@
 ---
-title: "Subtitles: Embedded HLS Tracks and Sidecar Files"
+title: "Subtitles: Embedded HLS Tracks and External Sidecars"
 sidebarTitle: "Subtitles"
-description: "Display embedded HLS subtitle tracks or external VTT/SRT sidecar files in better_native_video_player. Style, position, and switch tracks at runtime."
+description: "Display embedded HLS captions or external VTT/SRT sidecar files in better_native_video_player. Style, position, and switch subtitle tracks at runtime."
 ---
 
 `better_native_video_player` supports two complementary subtitle systems: **embedded tracks** that live inside the HLS manifest and are rendered by the native platform player, and **sidecar subtitles** — external VTT or SRT files rendered by the plugin's own Flutter overlay. Both types appear in the same track list returned by `getAvailableSubtitleTracks()`, distinguished by the `source` field, and both respond to the same `setSubtitleTrack()` call.

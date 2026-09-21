@@ -1,7 +1,7 @@
 ---
-title: "Performance Tuning for Multi-Player Feeds"
+title: "Performance Tuning for Scroll Feeds and Multi-Player Layouts"
 sidebarTitle: "Performance"
-description: "Optimize better_native_video_player for scroll feeds: concurrent player caps, viewport quality capping, buffer presets, disk cache, texture mode, and LRU player eviction."
+description: "Reduce memory and decode load in feeds: cap concurrent players, limit HLS quality to viewport, use feed buffer presets, and enable the Android disk cache."
 ---
 
 Running multiple video players simultaneously — as in an Instagram‑style feed — multiplies decode work, memory, and network load. `NativeVideoPlayerConfig` is a single global struct of opt‑in tuning knobs designed specifically for this scenario. All flags default to the plugin's existing behavior, so you can opt in one knob at a time and measure the impact.

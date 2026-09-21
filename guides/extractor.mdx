@@ -1,7 +1,7 @@
 ---
 title: "better_native_video_extractor: Vimeo and YouTube URLs"
 sidebarTitle: "Extractor"
-description: "Extract playable HLS streams from Vimeo and YouTube with better_native_video_extractor. Supports domain-locked videos, private hashes, token expiry, and concurrent extraction coalescing."
+description: "Extract HLS and MP4 streams from Vimeo and YouTube. Handles domain-locked videos, private hashes, token expiry, and concurrent extraction coalescing."
 ---
 
 `better_native_video_extractor` is a companion package that resolves Vimeo and YouTube video pages into playable HLS or MP4 stream URLs — plus thumbnails, duration, title, and storyboard sprite sheets — over plain HTTP with no hidden WebView involved. It ships as a separate pub.dev package so you only pull it in when you need it, and its `VideoSourceExtractor` interface means it plugs into any Flutter player, not just `better_native_video_player`.
@@ -36,6 +36,10 @@ import 'package:better_native_video_extractor/better_native_video_extractor.dart
   Additional HTTP headers, such as tenant authentication tokens. Defaults to an empty map.
 </ParamField>
 
+<ParamField path="client" type="HttpClient?" required={false}>
+  A custom `dart:io` `HttpClient` to use for all requests. When omitted a default `HttpClient()` is created internally. Pass a configured client to set connection timeouts, a proxy, or a custom security context.
+</ParamField>
+
 ### extract(videoUrlOrId)
 
 ```dart
@@ -44,20 +48,22 @@ Future<ExtractedVideo> extract(String videoUrlOrId)
 
 Accepts a full Vimeo URL (`https://vimeo.com/76979871`), a player URL (`https://player.vimeo.com/video/76979871`), or a bare numeric ID. Returns an `ExtractedVideo` on success and throws `VideoExtractionException` on failure.
 
-### ExtractedVideo fields
+### ExtractedVideo fields and getters
 
-| Field | Type | Description |
+| Field / Getter | Type | Description |
 |---|---|---|
-| `playbackUrl` | `String?` | Best stream URL for playback: H.264 HLS first, then default HLS, then progressive MP4. |
+| `provider` | `String` | Source platform identifier — `"vimeo"` or `"youtube"`. |
+| `videoId` | `String` | Platform-specific video identifier (e.g. `"76979871"` or `"76979871/privateHash"`). |
 | `hlsUrl` | `String?` | Default HLS (m3u8) URL. May contain non-AVC variants that AVPlayer rejects with "Cannot Decode" — prefer `playbackUrl`. |
 | `hlsAvcUrl` | `String?` | H.264-only HLS variant (`avc_url` from the Vimeo config). Safe for maximum device compatibility. |
 | `progressiveUrl` | `String?` | Progressive MP4, when the platform serves one (older/smaller videos). |
-| `bestThumbnail` | `ExtractedThumbnail?` | Largest available thumbnail (`url`, `width`, `height`). |
-| `thumbnails` | `List<ExtractedThumbnail>` | All thumbnail variants, sorted largest first. |
 | `title` | `String?` | Video title from the player config. |
 | `duration` | `Duration?` | Video duration. |
+| `thumbnails` | `List<ExtractedThumbnail>` | All thumbnail variants, sorted largest first. Each entry has `url` (String), `width` (int?), `height` (int?). |
 | `expiresAt` | `DateTime?` | Parsed from the `exp=` token in the stream URL (typically ~15 minutes). Null when the URL is not tokenized. |
 | `storyboard` | `ExtractedStoryboard?` | Scrub-preview sprite sheet (`url`, `frameWidth`, `frameHeight`, `columns`, `frames`), when provided by Vimeo's `thumb_preview` config. Feed to `StoryboardThumbnails.fromUniformGrid` to display scrub previews. |
+| `playbackUrl` *(getter)* | `String?` | Best stream URL for playback: `hlsAvcUrl ?? hlsUrl ?? progressiveUrl`. Prefers the H.264 HLS variant to avoid AVPlayer "Cannot Decode" errors. |
+| `bestThumbnail` *(getter)* | `ExtractedThumbnail?` | Largest available thumbnail, or `null` when `thumbnails` is empty. |
 
 ### isFresh()
 

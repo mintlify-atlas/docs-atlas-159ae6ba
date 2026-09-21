@@ -140,7 +140,7 @@ class _VideoPageState extends State<VideoPage> {
   @override
   void initState() {
     super.initState();
-    _controller = NativeVideoPlayerController();
+    _controller = NativeVideoPlayerController(id: 1);
     _controller.addActivityListener(_onActivity);
     _controller.addControlListener(_onControl);
   }
@@ -177,7 +177,7 @@ class _VideoPageState extends State<VideoPage> {
 ```
 
 <Tip>
-  Prefer `controller.stateStream` (a `ValueStream`) for UI rebuilds — it batches state changes and avoids redundant `setState` calls. Reserve the raw activity/control listeners for side-effects such as analytics, logging, or triggering navigation.
+  Prefer individual streams such as `controller.playerStateStream` and `controller.positionStream` in `StreamBuilder` widgets for UI rebuilds — they emit only when their specific value changes, avoiding redundant rebuilds. Reserve the raw activity/control listeners for side-effects such as analytics, logging, or triggering navigation.
 </Tip>
 
 ---

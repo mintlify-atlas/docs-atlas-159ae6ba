@@ -487,6 +487,8 @@ AirPlay state is global — a single shared `AirPlayStateManager` broadcasts to 
 <ParamField path="playbackRange" type="NativeVideoPlayerPlaybackRange?">Active A–B range, or `null` when unrestricted.</ParamField>
 <ParamField path="qualities" type="List<NativeVideoPlayerQuality>">Available HLS quality variants.</ParamField>
 <ParamField path="isInitialized" type="bool">Whether the platform view is ready.</ParamField>
+<ParamField path="videoSize" type="NativeVideoPlayerVideoSize?">Latest native video dimensions reported by texture-rendered views. `null` until the first frame's size is known. Used by the widget to letterbox the `Texture` to the correct aspect ratio.</ParamField>
+<ParamField path="isOverlayLocked" type="bool">Whether the custom controls overlay is permanently visible (locked). `true` after `lockOverlay()` is called; `false` after `unlockOverlay()`.</ParamField>
 <ParamField path="activeSidecarCueLines" type="ValueListenable<List<String>>">Active sidecar subtitle cue text at the current position.</ParamField>
 <ParamField path="hasSidecarSubtitleSelected" type="bool">Whether a sidecar track is currently selected.</ParamField>
 
@@ -550,6 +552,14 @@ All streams are broadcast streams — multiple listeners are allowed. They repla
 
 <ParamField path="qualitiesStream" type="Stream<List<NativeVideoPlayerQuality>>">
   Emits the complete list of available qualities whenever it is refreshed (initially after load, and after ABR updates the list).
+</ParamField>
+
+<ParamField path="videoSizeStream" type="Stream<NativeVideoPlayerVideoSize>">
+  Emits native video dimension changes. Only fired by texture-rendered views (Android texture mode / `NativeVideoPlayerConfig.androidTextureMode`). Platform views handle aspect ratio natively and may never emit.
+</ParamField>
+
+<ParamField path="isOverlayLockedStream" type="Stream<bool>">
+  Emits `true` when `lockOverlay()` is called and `false` when `unlockOverlay()` is called. Subscribe to react to lock-state changes without polling.
 </ParamField>
 
 ---

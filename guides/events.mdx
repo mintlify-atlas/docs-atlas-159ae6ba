@@ -1,5 +1,5 @@
 ---
-title: "Player Events: Activity and Control Streams"
+title: "Player Events: Activity, Control, and Property Streams"
 sidebarTitle: "Events"
 description: "Playback events split into activity events (play/pause/buffering) and control events (quality/speed/PiP/fullscreen), plus dedicated streams per property."
 ---
@@ -102,6 +102,10 @@ void _onControl(PlayerControlEvent event) {
 | `seeked` | A seek operation completed. |
 | `pipStarted` | The player entered Picture-in-Picture mode. |
 | `pipStopped` | The player exited Picture-in-Picture mode. |
+| `pipAvailabilityChanged` | PiP availability changed on the device (e.g. entered/exited fullscreen on Android). |
+| `airPlayAvailabilityChanged` | AirPlay device availability changed (iOS only). |
+| `airPlayConnected` | The player connected to an AirPlay device. |
+| `airPlayDisconnected` | The player disconnected from an AirPlay device. |
 | `fullscreenEntered` | The player entered fullscreen. |
 | `fullscreenExited` | The player exited fullscreen. |
 | `timeUpdated` | A playback tick: `data` contains `position`, `duration`, `bufferedPosition` (all milliseconds) and `isBuffering`. |
@@ -133,8 +137,12 @@ For times when you only care about one property — position, fullscreen state, 
 | `isPipEnabledStream` | `Stream<bool>` | PiP enters (`true`) or exits (`false`). |
 | `isPipAvailableStream` | `Stream<bool>` | PiP availability on the device changes. |
 | `isAirplayAvailableStream` | `Stream<bool>` | AirPlay device availability changes (iOS only, global). |
+| `isAirplayConnectedStream` | `Stream<bool>` | AirPlay connection state changes — `true` when connected to a device. |
+| `isAirplayConnectingStream` | `Stream<bool>` | Emits `true` while a connection is in progress, `false` on completion or failure. |
+| `airPlayDeviceNameStream` | `Stream<String?>` | The connected AirPlay device name, or `null` when disconnected. |
 | `isFullscreenStream` | `Stream<bool>` | Fullscreen enters (`true`) or exits (`false`). |
 | `qualityChangedStream` | `Stream<NativeVideoPlayerQuality>` | The active HLS quality variant changes. |
+| `qualitiesStream` | `Stream<List<NativeVideoPlayerQuality>>` | The list of available HLS quality variants changes. |
 
 ### Listening to `positionStream`
 

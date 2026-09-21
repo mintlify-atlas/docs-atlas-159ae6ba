@@ -1,5 +1,5 @@
 ---
-title: "AirPlay Support on iOS with Availability Tracking"
+title: "AirPlay Support on iOS with Device Availability Tracking"
 sidebarTitle: "AirPlay"
 description: "Enable AirPlay in better_native_video_player on iOS with automatic availability detection, connection state tracking, and device name reporting."
 ---
@@ -264,5 +264,5 @@ class _AirPlayStatusIndicatorState extends State<AirPlayStatusIndicator> {
 ```
 
 <Info>
-`AirPlayStateManager` emits the **current value immediately** on every new stream subscription, so widgets that subscribe in `initState` will receive the current state before the first frame — no need to call `isAirPlayAvailable()` separately.
+`AirPlayStateManager` emits the **current value immediately** on every new stream subscription, so widgets that subscribe in `initState` will receive the current state before the first frame — no need to read `isAirPlayAvailable` separately after subscribing.
 </Info>
